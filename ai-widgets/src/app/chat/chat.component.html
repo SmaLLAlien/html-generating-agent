@@ -1,0 +1,137 @@
+<div class="chat-wrap">
+
+  @if (phase() === 'setup') {
+    <div class="setup card">
+      <h1>Конструктор HTML-виджетов</h1>
+      <p class="muted">
+        Данные пользователя передаются агенту при старте диалога.
+      </p>
+      <label>
+        LDAP
+        <input
+          type="text"
+          [ngModel]="ldap()"
+          (ngModelChange)="ldap.set($event)"
+          placeholder="i.ivanov"
+        />
+      </label>
+      <label>
+        ФИО
+        <input
+          type="text"
+          [ngModel]="fullName()"
+          (ngModelChange)="fullName.set($event)"
+          placeholder="Иванов Иван Иванович"
+        />
+      </label>
+      @if (setupError()) {
+        <p class="error-text">{{ setupError() }}</p>
+      }
+      <button
+        class="btn primary"
+        [disabled]="busy() || !ldap().trim() || !fullName().trim()"
+        (click)="startSession()"
+      >
+        {{ busy() ? 'Создание сессии…' : 'Начать диалог' }}
+      </button>
+    </div>
+  }
+
+  @if (phase() === 'chat') {
+    <div class="chat card">
+      <header class="chat-header">
+        <div>
+          <strong>Чат с агентом</strong>
+          <span class="muted"> · {{ fullName() }} ({{ ldap() }})</span>
+        </div>
+        <button
+          class="btn danger"
+          [class.pulse]="canClose()"
+          [disabled]="busy()"
+          (click)="endDialog()"
+        >
+          Завершить диалог
+        </button>
+      </header>
+
+      @if (canClose()) {
+        <div class="close-banner">
+          ✅ Виджет принят — диалог можно закрывать.
+        </div>
+      }
+
+      <div class="messages" #scrollBox>
+        @for (m of messages(); track $index) {
+          <div class="msg" [class.user]="m.role === 'user'" [class.error]="m.error">
+            <div class="bubble">
+              @if (m.streaming && !m.text) {
+                <span class="typing">Агент печатает…</span>
+              } @else {
+                <span class="text">{{ m.text }}</span>
+              }
+
+              @if (m.widgetHtml) {
+                <div class="widget-block">
+                  <div class="widget-preview">
+                    <iframe
+                      sandbox=""
+                      [srcdoc]="trustHtml(m.widgetHtml)"
+                      title="Превью виджета"
+                    ></iframe>
+                  </div>
+                  <div class="widget-actions">
+                    <button
+                      class="btn primary"
+                      [disabled]="busy() || m.accepted || canClose()"
+                      (click)="accept($index)"
+                    >
+                      {{ m.accepted ? 'Принято ✓' : 'Принять' }}
+                    </button>
+                    <button class="btn" (click)="toggleCode($index)">
+                      {{ m.showCode ? 'Скрыть код' : 'Показать код' }}
+                    </button>
+                    <button class="btn" (click)="copyCode(m.widgetHtml)">
+                      Скопировать код
+                    </button>
+                  </div>
+                  @if (m.showCode) {
+                    <pre class="code"><code>{{ m.widgetHtml }}</code></pre>
+                  }
+                </div>
+              }
+            </div>
+          </div>
+        }
+      </div>
+
+      <footer class="composer">
+        <textarea
+          rows="2"
+          placeholder="Опишите виджет или уточнение…"
+          [ngModel]="input()"
+          (ngModelChange)="input.set($event)"
+          (keydown.enter)="$event.preventDefault(); send()"
+          [disabled]="busy()"
+        ></textarea>
+        <button
+          class="btn primary"
+          [disabled]="busy() || !input().trim()"
+          (click)="send()"
+        >
+          Отправить
+        </button>
+      </footer>
+    </div>
+  }
+
+  @if (phase() === 'closed') {
+    <div class="setup card">
+      <h1>Диалог завершён</h1>
+      <p class="muted">Память сессии на сервере удалена.</p>
+      <button class="btn primary" (click)="newDialog()">
+        Начать новый диалог
+      </button>
+    </div>
+  }
+
+</div>

@@ -42,3 +42,4 @@ testem.log
 Thumbs.db
 /my-express-server/node_modules/
 /ai-widgets/node_modules/
+.env
