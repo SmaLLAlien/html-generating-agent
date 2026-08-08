@@ -45,7 +45,10 @@ export const DEFAULT_MODEL_ID: string = isKnownModel(process.env.GEMINI_MODEL)
   : FALLBACK_MODEL_ID;
 
 export function getModelInfo(id: string): ModelInfo {
-  return MODELS.find((m) => m.id === id) ?? MODELS[1]!;
+  return (
+    MODELS.find((m) => m.id === id) ??
+    MODELS.find((m) => m.id === FALLBACK_MODEL_ID)!
+  );
 }
 
 let provider: GoogleGenerativeAIProvider | null = null;

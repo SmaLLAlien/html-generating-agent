@@ -27,6 +27,8 @@ export type AgentEvent =
       contextTokens: number;
       budget: number;
       percent: number;
+      /** Сколько входных токенов пришло из неявного кеша Gemini */
+      cachedTokens?: number;
     }
   /** Бюджет контекста исчерпан — диалог дальше не продолжаем */
   | { type: 'limit'; contextTokens: number; budget: number }

@@ -204,6 +204,7 @@ export class ChatComponent {
               contextTokens: event.contextTokens,
               budget: event.budget,
               percent: event.percent,
+              cachedTokens: event.cachedTokens,
             });
             this.checkContext(event.percent);
             break;
@@ -404,6 +405,27 @@ export class ChatComponent {
       return list;
     });
   }
+
+  /** Подсказка под полосой контекста: бюджет, окно модели и попадания в кеш */
+  readonly contextTooltip = computed(() => {
+    const ctx = this.context();
+    if (!ctx) return '';
+    const parts = [
+      `Использовано ${ctx.contextTokens} из ${ctx.budget} токенов рабочего бюджета`,
+    ];
+    const model = this.currentModel();
+    if (model) {
+      parts.push(`Окно модели: ${this.fmtTokens(model.contextWindow)} токенов`);
+    }
+    // Неявный кеш Gemini удешевляет входные токены в 10 раз — показываем,
+    // работает ли он вообще
+    parts.push(
+      ctx.cachedTokens
+        ? `Из кеша: ${this.fmtTokens(ctx.cachedTokens)} токенов`
+        : 'Из кеша: нет попаданий'
+    );
+    return parts.join('\n');
+  });
 
   /** 124000 → «124k», чтобы полоса контекста не расползалась */
   fmtTokens(value: number): string {

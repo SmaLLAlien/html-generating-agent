@@ -13,7 +13,13 @@ export type ChatStreamEvent =
       stage: 'widget-start' | 'fetching-variant';
       variant?: number;
     }
-  | { type: 'usage'; contextTokens: number; budget: number; percent: number }
+  | {
+      type: 'usage';
+      contextTokens: number;
+      budget: number;
+      percent: number;
+      cachedTokens?: number;
+    }
   | { type: 'limit'; contextTokens: number; budget: number }
   | { type: 'done'; finished: boolean }
   | { type: 'error'; error: string };
@@ -38,6 +44,8 @@ export interface ContextInfo {
   contextTokens: number;
   budget: number;
   percent: number;
+  /** Сколько входных токенов пришло из неявного кеша Gemini */
+  cachedTokens?: number;
 }
 
 export interface ChatMessage {

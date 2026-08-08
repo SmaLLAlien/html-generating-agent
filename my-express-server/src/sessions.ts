@@ -45,6 +45,8 @@ export interface ChatSession {
   modelId: string;
   /** Размер контекста после последнего хода (input + output прошлого вызова) */
   contextTokens: number;
+  /** Сколько ходов сделано в диалоге — агент видит это число и реже ходит по кругу */
+  turnCount: number;
   createdAt: number;
   lastActivityAt: number;
 }
@@ -66,6 +68,7 @@ export function createSession(user: UserInfo): ChatSession {
     variantCounter: 0,
     modelId: DEFAULT_MODEL_ID,
     contextTokens: 0,
+    turnCount: 0,
     createdAt: now,
     lastActivityAt: now,
   };

@@ -77,13 +77,7 @@
             class="ctx"
             [class.warn]="contextLevel() === 'warn'"
             [class.danger]="contextLevel() === 'danger'"
-            [title]="
-              'Использовано ' +
-              ctx.contextTokens +
-              ' из ' +
-              ctx.budget +
-              ' токенов рабочего бюджета'
-            "
+            [title]="contextTooltip()"
           >
             <span class="ctx-label"
               >{{ fmtTokens(ctx.contextTokens) }} /
