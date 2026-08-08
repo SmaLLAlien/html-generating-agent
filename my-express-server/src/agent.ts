@@ -1,50 +1,12 @@
-import { createGoogleGenerativeAI, type GoogleGenerativeAIProvider } from '@ai-sdk/google';
-import { streamObject, type ModelMessage } from 'ai';
-import { z } from 'zod';
+import { hasToolCall, stepCountIs, streamText, type ModelMessage } from 'ai';
+import { CONTEXT_BUDGET_TOKENS, MAX_AGENT_STEPS } from './config.js';
+import type { EmitEvent } from './events.js';
+import { evictOldWidgets } from './memory.js';
+import { resolveModel } from './models.js';
 import type { ChatSession, UserInfo } from './sessions.js';
+import { buildTools } from './tools.js';
 
-/**
- * Структурированный ответ агента.
- * Порядок полей важен: message идёт первым, чтобы текст стримился раньше HTML.
- */
-export const agentResponseSchema = z.object({
-  message: z
-    .string()
-    .describe(
-      'Текстовый ответ пользователю на русском языке. НИКОГДА не вставляй сюда HTML-код виджета.'
-    ),
-  widgetHtml: z
-    .string()
-    .nullable()
-    .describe(
-      'Полный самодостаточный HTML-код виджета БЕЗ JavaScript, если в этом ответе есть новая или обновлённая версия виджета. Если виджета в ответе нет (уточняющий вопрос, обычный ответ, прощание) — null.'
-    ),
-  canClose: z
-    .boolean()
-    .describe(
-      'true ТОЛЬКО когда пользователь явно одобрил/принял виджет и диалог можно завершать. Во всех остальных случаях false.'
-    ),
-});
-
-export type AgentResponse = z.infer<typeof agentResponseSchema>;
-
-const DEFAULT_MODEL = 'gemini-2.5-flash';
-
-let provider: GoogleGenerativeAIProvider | null = null;
-
-function getModel() {
-  const apiKey =
-    process.env.GEMINI_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      'Не задан GEMINI_API_KEY. Создайте файл my-express-server/.env по образцу .env.example.'
-    );
-  }
-  if (!provider) {
-    provider = createGoogleGenerativeAI({ apiKey });
-  }
-  return provider(process.env.GEMINI_MODEL ?? DEFAULT_MODEL);
-}
+export { stripJavaScript } from './tools.js';
 
 function buildSystemPrompt(user: UserInfo): string {
   return `Ты — ассистент-верстальщик, который помогает сотруднику создавать HTML-виджеты.
@@ -53,72 +15,143 @@ function buildSystemPrompt(user: UserInfo): string {
 - ФИО: ${user.fullName}
 - LDAP: ${user.ldap}
 
+ИНСТРУМЕНТЫ:
+- emitWidget — ЕДИНСТВЕННЫЙ способ показать виджет пользователю. Вызывай его каждый раз, когда создаёшь или изменяешь виджет.
+- getVariant — получить полный код ранее созданного варианта по номеру.
+- finishDialog — завершить диалог после явного одобрения виджета.
+
 ЖЁСТКИЕ ПРАВИЛА ДЛЯ ВИДЖЕТОВ:
-1. Виджет — это ТОЛЬКО HTML и CSS. Никакого JavaScript: запрещены теги <script>, атрибуты-обработчики (onclick, onload и т.п.), ссылки javascript:, а также <iframe>, <object>, <embed>.
+1. Виджет — это ТОЛЬКО HTML и CSS. Никакого JavaScript: запрещены теги <script>, атрибуты-обработчики (onclick, onload и т.п.), ссылки javascript:, а также <iframe>, <object>, <embed>. Если инструмент отклонил код — исправь нарушения и вызови его заново.
 2. Стили — инлайновые (style="...") или в теге <style> внутри виджета. Виджет должен быть самодостаточным фрагментом: его можно вставить в любую страницу как есть.
-3. Каждый раз, когда ты создаёшь или изменяешь виджет, клади его ПОЛНЫЙ код (не диф, не фрагмент изменений) в поле widgetHtml.
-4. В поле message — только текст: описание, вопросы, пояснения. Код виджета в message НЕ дублируй.
-5. Если ответ не содержит виджет (уточняющий вопрос, совет, прощание) — widgetHtml = null.
+3. В emitWidget всегда клади ПОЛНЫЙ код виджета (не диф, не фрагмент изменений).
+4. НИКОГДА не пиши HTML-код виджета в тексте ответа — ни целиком, ни кусками, ни в блоке кода. Пользователь видит виджет из emitWidget. В тексте — только описание, вопросы и пояснения.
+5. Если ты дорабатываешь существующий вариант — укажи его номер в basedOn.
+6. Код старых вариантов в истории заменён пометкой и тебе не виден. Если он нужен — вызови getVariant с номером. Номера вариантов не переиспользуются: доработка варианта #1 создаёт новый вариант со следующим свободным номером.
 
 ПРАВИЛА ДИАЛОГА:
 - Общайся на русском, вежливо, обращайся к пользователю по имени.
 - Если требования неполные, задай 1–2 уточняющих вопроса, но при возможности сразу предложи первый вариант виджета.
-- Когда пользователь явно одобряет виджет (например, приходит сообщение о нажатии кнопки «Принять» или он пишет «принимаю», «подходит», «одобряю») — поблагодари, кратко попрощайся и верни canClose = true (widgetHtml в этом ответе = null).
-- Во всех остальных ответах canClose = false.`;
-}
-
-/** Подстраховка: вырезаем любой JavaScript, если модель нарушила правила */
-export function stripJavaScript(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script\s*>/gi, '')
-    .replace(/<script[^>]*\/?>/gi, '')
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
-    .replace(/javascript:/gi, '');
+- Если пользователь ссылается на прошлый вариант неоднозначно («верни как было», «тот, с иконкой») — сверься с каталогом вариантов и уточни номер, прежде чем работать.
+- Когда пользователь явно одобряет виджет (приходит сообщение о нажатии кнопки «Принять» или он пишет «принимаю», «подходит», «одобряю») — поблагодари, кратко попрощайся и вызови finishDialog.`;
 }
 
 /**
- * Запускает агента для одного сообщения пользователя.
- * История берётся из сессии; при успехе сообщение пользователя и ответ
- * агента дописываются в память сессии.
+ * Эфемерная подсказка со списком всех вариантов — без кода, ~10 токенов на вариант.
+ * Ставится в хвост перед сообщением пользователя (не в системный промпт, иначе
+ * каждый ход инвалидируется префиксный кеш) и не сохраняется в историю.
+ */
+function catalogMessages(session: ChatSession): ModelMessage[] {
+  if (!session.variants.length) return [];
+
+  const latest = session.variants.at(-1)!.n;
+  const list = session.variants
+    .map((v) => {
+      const marks: string[] = [];
+      if (v.n === latest) marks.push('текущий');
+      if (v.accepted) marks.push('принят');
+      if (v.basedOn != null) marks.push(`на основе #${v.basedOn}`);
+      return `#${v.n} «${v.title}»${marks.length ? ` (${marks.join(', ')})` : ''}`;
+    })
+    .join('; ');
+
+  return [
+    {
+      role: 'user',
+      content:
+        `[Каталог вариантов] ${list}. ` +
+        'Полный код любого из них можно получить инструментом getVariant.',
+    },
+  ];
+}
+
+export interface AgentTurnResult {
+  /** Агент вызвал finishDialog */
+  finished: boolean;
+  /** Сколько токенов займёт история на следующем вызове */
+  contextTokens: number;
+}
+
+/**
+ * Один ход агента. Текст стримится приращениями, виджет и завершение диалога
+ * приезжают событиями из инструментов.
  */
 export async function runAgent(
   session: ChatSession,
   userText: string,
-  onPartial: (partial: { message: string }) => void
-): Promise<AgentResponse> {
+  emit: EmitEvent
+): Promise<AgentTurnResult> {
   const userMessage: ModelMessage = { role: 'user', content: userText };
-  const messages: ModelMessage[] = [...session.messages, userMessage];
 
-  const result = streamObject({
-    model: getModel(),
-    schema: agentResponseSchema,
+  const result = streamText({
+    model: resolveModel(session.modelId),
     system: buildSystemPrompt(session.user),
-    messages,
+    messages: [...session.messages, ...catalogMessages(session), userMessage],
+    tools: buildTools(session, emit),
+    stopWhen: [stepCountIs(MAX_AGENT_STEPS), hasToolCall('finishDialog')],
     temperature: 0.7,
   });
 
-  for await (const partial of result.partialObjectStream) {
-    if (typeof partial.message === 'string') {
-      onPartial({ message: partial.message });
+  let finished = false;
+  let emittedText = false;
+  let textInStep = false;
+
+  for await (const part of result.fullStream) {
+    switch (part.type) {
+      case 'start-step':
+        textInStep = false;
+        break;
+
+      case 'text-delta':
+        // Между шагами модель может заговорить снова — разделяем абзацем,
+        // иначе реплики склеиваются в одно слово.
+        if (!textInStep && emittedText) emit({ type: 'text', delta: '\n\n' });
+        textInStep = true;
+        emittedText = true;
+        emit({ type: 'text', delta: part.text });
+        break;
+
+      case 'tool-call':
+        if (part.toolName === 'finishDialog') finished = true;
+        break;
+
+      case 'error':
+        throw part.error instanceof Error
+          ? part.error
+          : new Error(String(part.error));
     }
   }
 
-  const finalObject = await result.object;
+  // Успех — фиксируем обмен в памяти агента.
+  // response.messages содержит ответ ассистента вместе с вызовами инструментов
+  // и сообщения с их результатами.
+  const response = await result.response;
+  session.messages.push(userMessage, ...response.messages);
 
-  const response: AgentResponse = {
-    ...finalObject,
-    widgetHtml: finalObject.widgetHtml
-      ? stripJavaScript(finalObject.widgetHtml)
-      : null,
-  };
+  // Вытесняем код всех вариантов, кроме закреплённых. Делаем это сразу после
+  // хода, чтобы уже следующий вызов ушёл с укороченной историей.
+  const evicted = evictOldWidgets(session);
+  if (evicted.evicted) {
+    console.log(
+      `[контекст] вытеснено ${evicted.evicted} фрагм., −${evicted.freedChars} симв.; ` +
+        `в контексте целиком: ${evicted.pinned.map((n) => '#' + n).join(', ')}`
+    );
+  }
 
-  // Успех — фиксируем обмен в памяти агента
-  session.messages.push(userMessage, {
-    role: 'assistant',
-    content: JSON.stringify(response),
+  // ВАЖНО: usage (последний шаг), а не totalUsage (сумма по всем шагам).
+  // Каждый шаг агентного цикла переотправляет всю историю, поэтому totalUsage
+  // на многошаговом ходе задваивает её и счётчик скачет вперёд-назад.
+  // Размер истории для следующего вызова = вход последнего шага + его выход.
+  const usage = await result.usage;
+  const contextTokens =
+    (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || session.contextTokens;
+  session.contextTokens = contextTokens;
+
+  emit({
+    type: 'usage',
+    contextTokens,
+    budget: CONTEXT_BUDGET_TOKENS,
+    percent: Math.round((contextTokens / CONTEXT_BUDGET_TOKENS) * 100),
   });
 
-  return response;
+  return { finished, contextTokens };
 }

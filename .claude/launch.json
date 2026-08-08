@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ai-widgets",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start", "--prefix", "ai-widgets"],
+      "port": 4200
+    }
+  ]
+}

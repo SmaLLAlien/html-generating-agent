@@ -1,30 +1,65 @@
-/** Итоговый структурированный ответ агента */
-export interface AgentFinal {
-  message: string;
-  /** Полный HTML-код виджета (без JS) — отдельным полем, чтобы его можно было забрать как есть */
-  widgetHtml: string | null;
-  /** true — пользователь одобрил виджет, чат можно закрывать */
-  canClose: boolean;
-}
-
-/** События SSE-потока от сервера */
+/** События SSE-потока (зеркало AgentEvent на сервере) */
 export type ChatStreamEvent =
-  | { type: 'partial'; message: string }
-  | ({ type: 'final' } & AgentFinal)
+  | { type: 'text'; delta: string }
+  | {
+      type: 'widget';
+      variant: number;
+      title: string;
+      basedOn: number | null;
+      html: string;
+    }
+  | {
+      type: 'status';
+      stage: 'widget-start' | 'fetching-variant';
+      variant?: number;
+    }
+  | { type: 'usage'; contextTokens: number; budget: number; percent: number }
+  | { type: 'limit'; contextTokens: number; budget: number }
+  | { type: 'done'; finished: boolean }
   | { type: 'error'; error: string };
 
-/** Сообщение в ленте чата */
+export interface ModelInfo {
+  id: string;
+  label: string;
+  /** Физическое окно модели, токенов */
+  contextWindow: number;
+  hint: string;
+}
+
+export interface ModelsResponse {
+  models: ModelInfo[];
+  defaultModelId: string;
+  contextBudget: number;
+  warnRatio: number;
+}
+
+/** Расход контекста по данным последнего ответа модели */
+export interface ContextInfo {
+  contextTokens: number;
+  budget: number;
+  percent: number;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   widgetHtml?: string | null;
-  /** Виджет из этого сообщения принят кнопкой «Принять» */
+  /** Номер варианта, присвоенный сервером */
+  variant?: number;
+  variantTitle?: string;
+  /** Номер варианта, который дорабатывался */
+  basedOn?: number | null;
+  /** «Принять» нажато для виджета этого сообщения */
   accepted?: boolean;
-  /** Ответ ещё стримится */
   streaming?: boolean;
+  /** Модель собирает виджет — показываем индикацию */
+  buildingWidget?: boolean;
   error?: boolean;
-  /** Показать блок с кодом */
+  /** Блок кода развёрнут */
   showCode?: boolean;
-  /** Время отправки (ЧЧ:ММ) */
+  /** Служебная плашка в ленте (предупреждение о контексте, лимит) */
+  notice?: 'warn' | 'limit';
+  /** Процент на момент появления плашки — иначе она «переписывается» задним числом */
+  noticePercent?: number;
   time?: string;
 }

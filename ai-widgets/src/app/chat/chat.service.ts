@@ -1,12 +1,30 @@
 import { Injectable } from '@angular/core';
-import { ChatStreamEvent } from './chat.models';
+import { ChatStreamEvent, ModelsResponse } from './chat.models';
+
+export interface SendBody {
+  text?: string;
+  action?: 'accept' | 'revisit';
+  variant?: number;
+}
 
 @Injectable({ providedIn: 'root' })
 export class ChatService {
   private readonly base = '/api/chat';
 
+  /** Список моделей и настройки бюджета контекста */
+  async listModels(): Promise<ModelsResponse> {
+    const resp = await fetch(`${this.base}/models`);
+    if (!resp.ok) {
+      throw new Error(`Не удалось получить список моделей (HTTP ${resp.status})`);
+    }
+    return (await resp.json()) as ModelsResponse;
+  }
+
   /** Создать сессию, передав данные пользователя (LDAP + ФИО) */
-  async createSession(ldap: string, fullName: string): Promise<string> {
+  async createSession(
+    ldap: string,
+    fullName: string
+  ): Promise<{ sessionId: string; modelId: string }> {
     const resp = await fetch(`${this.base}/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -15,22 +33,42 @@ export class ChatService {
     if (!resp.ok) {
       throw new Error(`Не удалось создать сессию (HTTP ${resp.status})`);
     }
-    const data = (await resp.json()) as { sessionId: string };
-    return data.sessionId;
+    return (await resp.json()) as { sessionId: string; modelId: string };
   }
 
-  /** Завершить диалог: сервер удалит память сессии */
+  /** Сменить модель. История и варианты сессии сохраняются. */
+  async setModel(sessionId: string, modelId: string): Promise<void> {
+    const resp = await fetch(`${this.base}/${sessionId}/model`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modelId }),
+    });
+    if (!resp.ok) {
+      throw new Error(`Не удалось сменить модель (HTTP ${resp.status})`);
+    }
+  }
+
+  /** Завершить диалог: сервер удалит историю и все варианты сессии */
   async endSession(sessionId: string): Promise<void> {
     await fetch(`${this.base}/${sessionId}`, { method: 'DELETE' });
   }
 
   /**
-   * Отправить сообщение и читать SSE-поток ответа.
-   * body: { text } — обычное сообщение, { action: 'accept' } — нажата кнопка «Принять».
+   * То же при закрытии вкладки. `keepalive` (в отличие от sendBeacon) умеет DELETE
+   * и переживает выгрузку страницы — иначе сессия висела бы до истечения TTL.
    */
+  closeOnUnload(sessionId: string): void {
+    try {
+      fetch(`${this.base}/${sessionId}`, { method: 'DELETE', keepalive: true });
+    } catch {
+      /* вкладка уже выгружается — сессию доберёт уборщик по TTL */
+    }
+  }
+
+  /** Отправить сообщение и читать SSE-поток ответа */
   async streamMessage(
     sessionId: string,
-    body: { text?: string; action?: 'accept' },
+    body: SendBody,
     onEvent: (event: ChatStreamEvent) => void
   ): Promise<void> {
     const resp = await fetch(`${this.base}/${sessionId}/message`, {

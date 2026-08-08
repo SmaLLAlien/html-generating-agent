@@ -1,14 +1,16 @@
 import {
   Component,
   ElementRef,
+  HostListener,
+  computed,
   inject,
   signal,
   viewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ChatMessage } from './chat.models';
-import { ChatService } from './chat.service';
+import { ChatMessage, ContextInfo, ModelInfo } from './chat.models';
+import { ChatService, SendBody } from './chat.service';
 
 type Phase = 'setup' | 'chat' | 'closed';
 
@@ -25,6 +27,8 @@ export class ChatComponent {
   private readonly safeHtmlCache = new Map<string, SafeHtml>();
 
   private sessionId: string | null = null;
+  /** Предупреждение о 80% показываем один раз на диалог */
+  private warnShown = false;
 
   readonly open = signal(false);
   readonly phase = signal<Phase>('setup');
@@ -36,6 +40,43 @@ export class ChatComponent {
   readonly canClose = signal(false);
   readonly setupError = signal('');
 
+  readonly models = signal<ModelInfo[]>([]);
+  readonly modelId = signal('');
+  readonly context = signal<ContextInfo | null>(null);
+  readonly limitReached = signal(false);
+  private warnRatio = 0.8;
+
+  readonly currentModel = computed(() =>
+    this.models().find((m) => m.id === this.modelId())
+  );
+
+  /** Доля бюджета в процентах, обрезанная сотней — для ширины полосы */
+  readonly contextPercent = computed(() =>
+    Math.min(100, this.context()?.percent ?? 0)
+  );
+
+  readonly contextLevel = computed(() => {
+    const percent = this.context()?.percent ?? 0;
+    if (percent >= 100) return 'danger';
+    if (percent >= this.warnRatio * 100) return 'warn';
+    return 'ok';
+  });
+
+  constructor() {
+    void this.loadModels();
+  }
+
+  private async loadModels(): Promise<void> {
+    try {
+      const data = await this.chat.listModels();
+      this.models.set(data.models);
+      this.warnRatio = data.warnRatio;
+      if (!this.modelId()) this.modelId.set(data.defaultModelId);
+    } catch {
+      /* список моделей не критичен — селектор просто не появится */
+    }
+  }
+
   togglePanel(): void {
     this.open.update((v) => !v);
     if (this.open()) this.scrollDown();
@@ -46,18 +87,13 @@ export class ChatComponent {
     this.busy.set(true);
     this.setupError.set('');
     try {
-      this.sessionId = await this.chat.createSession(
+      const { sessionId, modelId } = await this.chat.createSession(
         this.ldap().trim(),
         this.fullName().trim()
       );
-      this.messages.set([
-        {
-          role: 'assistant',
-          text: `Здравствуйте, ${this.fullName().trim()}! Опишите, какой HTML-виджет вам нужен (без JavaScript), — я предложу вариант, а вы сможете уточнять его, пока не нажмёте «Принять».`,
-          time: this.now(),
-        },
-      ]);
-      this.canClose.set(false);
+      this.sessionId = sessionId;
+      this.modelId.set(modelId);
+      this.resetConversation();
       this.phase.set('chat');
     } catch (err) {
       this.setupError.set(
@@ -68,23 +104,72 @@ export class ChatComponent {
     }
   }
 
+  /** Приветствие и чистый локальный стейт. Серверная сессия уже создана. */
+  private resetConversation(): void {
+    this.messages.set([
+      {
+        role: 'assistant',
+        text: `Здравствуйте, ${this.fullName().trim()}! Опишите, какой HTML-виджет вам нужен (без JavaScript), — я предложу вариант, а вы сможете уточнять его, пока не нажмёте «Принять».`,
+        time: this.now(),
+      },
+    ]);
+    this.canClose.set(false);
+    this.limitReached.set(false);
+    this.context.set(null);
+    this.warnShown = false;
+    this.safeHtmlCache.clear();
+  }
+
+  async changeModel(modelId: string): Promise<void> {
+    if (!modelId || modelId === this.modelId()) return;
+    const previous = this.modelId();
+    this.modelId.set(modelId);
+    if (!this.sessionId) return;
+    try {
+      await this.chat.setModel(this.sessionId, modelId);
+    } catch {
+      this.modelId.set(previous);
+    }
+  }
+
   async send(): Promise<void> {
     const text = this.input().trim();
-    if (!text) return;
+    if (!text || this.limitReached()) return;
     this.input.set('');
     await this.exchange({ text }, text);
   }
 
   async accept(index: number): Promise<void> {
     if (this.busy()) return;
+    const variant = this.messages()[index]?.variant;
     this.messages.update((list) =>
       list.map((m, i) => (i === index ? { ...m, accepted: true } : m))
     );
-    await this.exchange({ action: 'accept' }, 'Принимаю этот виджет ✅');
+    await this.exchange(
+      { action: 'accept', variant },
+      variant != null
+        ? `Принимаю вариант #${variant} ✅`
+        : 'Принимаю этот виджет ✅'
+    );
+  }
+
+  /** Взять старый вариант за основу — детерминированно, по номеру */
+  async revisit(index: number): Promise<void> {
+    if (this.busy() || this.limitReached()) return;
+    const variant = this.messages()[index]?.variant;
+    if (variant == null) return;
+    const comment = this.input().trim();
+    this.input.set('');
+    await this.exchange(
+      { action: 'revisit', variant, text: comment || undefined },
+      comment
+        ? `Дорабатываем вариант #${variant}: ${comment}`
+        : `Дорабатываем вариант #${variant}`
+    );
   }
 
   private async exchange(
-    body: { text?: string; action?: 'accept' },
+    body: SendBody,
     shownUserText: string
   ): Promise<void> {
     if (this.busy() || !this.sessionId) return;
@@ -99,17 +184,52 @@ export class ChatComponent {
 
     try {
       await this.chat.streamMessage(this.sessionId, body, (event) => {
-        if (event.type === 'partial') {
-          this.patchLast({ text: event.message });
-        } else if (event.type === 'final') {
-          this.patchLast({
-            text: event.message,
-            widgetHtml: event.widgetHtml,
-            streaming: false,
-          });
-          if (event.canClose) this.canClose.set(true);
-        } else {
-          this.patchLast({ text: event.error, error: true, streaming: false });
+        switch (event.type) {
+          case 'text':
+            this.appendText(event.delta);
+            break;
+
+          case 'status':
+            if (event.stage === 'widget-start') {
+              this.patchLast({ buildingWidget: true });
+            }
+            break;
+
+          case 'widget':
+            this.attachWidget(event);
+            break;
+
+          case 'usage':
+            this.context.set({
+              contextTokens: event.contextTokens,
+              budget: event.budget,
+              percent: event.percent,
+            });
+            this.checkContext(event.percent);
+            break;
+
+          case 'limit':
+            this.context.set({
+              contextTokens: event.contextTokens,
+              budget: event.budget,
+              percent: 100,
+            });
+            this.limitReached.set(true);
+            this.pushNotice('limit');
+            break;
+
+          case 'done':
+            if (event.finished) this.canClose.set(true);
+            break;
+
+          case 'error':
+            this.patchLast({
+              text: event.error,
+              error: true,
+              streaming: false,
+              buildingWidget: false,
+            });
+            break;
         }
         this.scrollDown();
       });
@@ -121,28 +241,109 @@ export class ChatComponent {
         streaming: false,
       });
     } finally {
-      this.patchLast({ streaming: false });
+      this.patchLast({ streaming: false, buildingWidget: false });
+      this.dropEmptyTail();
       this.busy.set(false);
       this.scrollDown();
     }
   }
 
-  async endDialog(): Promise<void> {
-    if (this.sessionId) {
-      try {
-        await this.chat.endSession(this.sessionId);
-      } catch {
-        /* сервер мог быть недоступен — всё равно закрываем локально */
-      }
+  private attachWidget(event: {
+    variant: number;
+    title: string;
+    basedOn: number | null;
+    html: string;
+  }): void {
+    const patch = {
+      widgetHtml: event.html,
+      variant: event.variant,
+      variantTitle: event.title,
+      basedOn: event.basedOn,
+      buildingWidget: false,
+    };
+
+    const last = this.messages().at(-1);
+    // За один ход агент может выдать несколько виджетов — тогда каждому свой пузырь
+    if (last && last.role === 'assistant' && !last.widgetHtml) {
+      this.patchLast(patch);
+    } else {
+      this.messages.update((list) => [
+        ...list,
+        { role: 'assistant', text: '', streaming: true, time: this.now(), ...patch },
+      ]);
     }
-    this.sessionId = null;
+  }
+
+  private checkContext(percent: number): void {
+    if (percent >= 100) {
+      this.limitReached.set(true);
+      this.pushNotice('limit');
+      return;
+    }
+    if (percent >= this.warnRatio * 100 && !this.warnShown) {
+      this.warnShown = true;
+      this.pushNotice('warn');
+    }
+  }
+
+  private pushNotice(kind: 'warn' | 'limit'): void {
+    // Не дублируем одну и ту же плашку подряд
+    if (this.messages().at(-1)?.notice === kind) return;
+    this.messages.update((list) => [
+      ...list,
+      {
+        role: 'assistant',
+        text: '',
+        notice: kind,
+        noticePercent: this.context()?.percent ?? 0,
+        time: this.now(),
+      },
+    ]);
+  }
+
+  async endDialog(): Promise<void> {
+    await this.dropSession();
     this.phase.set('closed');
   }
 
-  newDialog(): void {
-    this.messages.set([]);
-    this.canClose.set(false);
-    this.phase.set('setup');
+  /** Новый диалог: старая сессия удаляется на сервере вместе с историей и вариантами */
+  async newDialog(): Promise<void> {
+    if (this.busy()) return;
+    this.busy.set(true);
+    try {
+      await this.dropSession();
+      const { sessionId, modelId } = await this.chat.createSession(
+        this.ldap().trim(),
+        this.fullName().trim()
+      );
+      this.sessionId = sessionId;
+      this.modelId.set(modelId);
+      this.resetConversation();
+      this.phase.set('chat');
+    } catch (err) {
+      this.setupError.set(
+        err instanceof Error ? err.message : 'Не удалось создать сессию'
+      );
+      this.phase.set('setup');
+    } finally {
+      this.busy.set(false);
+      this.scrollDown();
+    }
+  }
+
+  private async dropSession(): Promise<void> {
+    if (!this.sessionId) return;
+    try {
+      await this.chat.endSession(this.sessionId);
+    } catch {
+      /* сервер мог быть недоступен — всё равно закрываем локально */
+    }
+    this.sessionId = null;
+  }
+
+  @HostListener('window:beforeunload')
+  onUnload(): void {
+    if (this.sessionId) this.chat.closeOnUnload(this.sessionId);
   }
 
   toggleCode(index: number): void {
@@ -168,6 +369,16 @@ export class ChatComponent {
     return safe;
   }
 
+  private appendText(delta: string): void {
+    this.messages.update((list) => {
+      if (!list.length) return list;
+      const copy = [...list];
+      const last = copy[copy.length - 1];
+      copy[copy.length - 1] = { ...last, text: last.text + delta };
+      return copy;
+    });
+  }
+
   private patchLast(patch: Partial<ChatMessage>): void {
     this.messages.update((list) => {
       if (!list.length) return list;
@@ -175,6 +386,32 @@ export class ChatComponent {
       copy[copy.length - 1] = { ...copy[copy.length - 1], ...patch };
       return copy;
     });
+  }
+
+  /** Агент мог закончить ход вызовом инструмента без текста — пустой пузырь убираем */
+  private dropEmptyTail(): void {
+    this.messages.update((list) => {
+      const last = list.at(-1);
+      if (
+        last &&
+        last.role === 'assistant' &&
+        !last.text &&
+        !last.widgetHtml &&
+        !last.notice
+      ) {
+        return list.slice(0, -1);
+      }
+      return list;
+    });
+  }
+
+  /** 124000 → «124k», чтобы полоса контекста не расползалась */
+  fmtTokens(value: number): string {
+    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+    // До 10k округление до тысяч слишком грубое: 2500 превратилось бы в «3k»
+    if (value >= 10_000) return `${Math.round(value / 1000)}k`;
+    if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+    return String(value);
   }
 
   private now(): string {

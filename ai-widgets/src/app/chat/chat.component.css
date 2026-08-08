@@ -430,6 +430,135 @@
   font-size: 13px;
 }
 
+/* --- Панель под шапкой: модель + расход контекста --- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: #fff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+}
+
+.model-select {
+  flex-shrink: 0;
+  max-width: 45%;
+  padding: 3px 6px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--pb-text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.model-select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ctx {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  --ctx-color: var(--pb-green);
+}
+
+.ctx.warn {
+  --ctx-color: #e8a33d;
+}
+
+.ctx.danger {
+  --ctx-color: #c5221f;
+}
+
+.ctx-label {
+  color: var(--pb-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ctx.warn .ctx-label,
+.ctx.danger .ctx-label {
+  color: var(--ctx-color);
+  font-weight: 600;
+}
+
+.ctx-bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.ctx-fill {
+  display: block;
+  height: 100%;
+  background: var(--ctx-color);
+  transition: width 0.3s ease-out;
+}
+
+/* --- Служебные плашки в ленте --- */
+.notice {
+  align-self: stretch;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff6e5;
+  border: 1px solid #f0d9a8;
+  color: #7a5410;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.notice.limit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  background: #fdecea;
+  border-color: #f3bcb8;
+  color: #8c1d18;
+}
+
+/* --- Номер варианта под превью --- */
+.variant-badge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--pb-muted);
+}
+
+.variant-num {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #eef7e6;
+  color: #3d7d1c;
+  font-weight: 600;
+}
+
+.variant-title {
+  color: var(--pb-text);
+}
+
+.variant-parent::before {
+  content: '· ';
+}
+
+.building {
+  display: block;
+  margin-top: 6px;
+}
+
 /* --- Мобильные --- */
 @media (max-width: 480px) {
   .panel {
