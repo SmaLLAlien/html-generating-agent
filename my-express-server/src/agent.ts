@@ -7,7 +7,7 @@ import {
 } from './config.js';
 import type { EmitEvent } from './events.js';
 import { evictOldWidgets } from './memory.js';
-import { resolveModel } from './models.js';
+import { callSettingsFor, resolveModel } from './models.js';
 import type { ChatSession, UserInfo } from './sessions.js';
 import { buildTools } from './tools.js';
 
@@ -119,7 +119,8 @@ export async function runAgent(
     messages: [...session.messages, ...stateMessages(session), userMessage],
     tools: buildTools(session, emit),
     stopWhen: [stepCountIs(MAX_AGENT_STEPS), hasToolCall('finishDialog')],
-    temperature: 0.7,
+    // temperature и настройки мышления зависят от поколения модели
+    ...callSettingsFor(session.modelId),
   });
 
   let finished = false;
@@ -173,15 +174,26 @@ export async function runAgent(
   // на многошаговом ходе задваивает её и счётчик скачет вперёд-назад.
   // Размер истории для следующего вызова = вход последнего шага + его выход.
   const usage = await result.usage;
+  // reasoningTokens сюда не входят: размышления модели оплачиваются, но в
+  // историю не попадают — обратно уезжают только их подписи (thought signatures).
+  // Отдельные модели семейства 3 иногда не отдают outputTokens вовсе, поэтому
+  // сумма может оказаться нулевой — тогда оставляем прежнее значение.
   const contextTokens =
     (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || session.contextTokens;
   session.contextTokens = contextTokens;
   session.turnCount++;
 
   const cachedTokens = await readCachedTokens(result, usage);
+
+  // А вот размышления считаются наоборот — по totalUsage. Модель думает на
+  // ПЕРВОМ шаге, перед вызовом инструмента, поэтому в usage последнего шага
+  // reasoningTokens приходит undefined. Две метрики — два источника:
+  // размер истории берём с последнего шага, стоимость размышлений — со всех.
+  const reasoningTokens = (await result.totalUsage).reasoningTokens ?? 0;
   console.log(
     `[контекст] ход ${session.turnCount}: ${contextTokens} токенов` +
-      (cachedTokens ? `, из них из кеша ${cachedTokens}` : ', кеш не сработал')
+      (cachedTokens ? `, из них из кеша ${cachedTokens}` : ', кеш не сработал') +
+      (reasoningTokens ? `; на размышления ${reasoningTokens}` : '')
   );
 
   emit({
@@ -190,6 +202,7 @@ export async function runAgent(
     budget: CONTEXT_BUDGET_TOKENS,
     percent: Math.round((contextTokens / CONTEXT_BUDGET_TOKENS) * 100),
     cachedTokens,
+    reasoningTokens,
   });
 
   return { finished, contextTokens };

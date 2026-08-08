@@ -64,8 +64,18 @@ cd ai-widgets && npm install && npm start
 }
 ```
 
-В `models` реально приходят все три модели — `gemini-2.5-pro`, `gemini-2.5-flash`,
-`gemini-2.5-flash-lite`; выше показана одна для краткости.
+Выше показана одна модель для краткости. Реальный состав реестра:
+
+| Модель | Поколение | Мышление | Когда брать |
+|---|---|---|---|
+| `gemini-2.5-flash` | 2.5 | — | По умолчанию: проверено на этом проекте |
+| `gemini-2.5-pro` | 2.5 | — | Когда нужна точность, а скорость не важна |
+| `gemini-3.6-flash` | 3 | `low` | Новое поколение, лучше следует инструментам |
+| `gemini-3.5-flash-lite` | 3 | `minimal` | Быстро и дёшево, почти без размышлений |
+| `gemini-3.1-pro-preview` | 3 | `medium` | Самая сильная и самая дорогая |
+
+Модель переключается в середине диалога без потери истории и вариантов. Подробности
+про поколения и размышления — в [docs/agent-architecture.md](docs/agent-architecture.md).
 
 ### `POST /session`
 
@@ -105,7 +115,7 @@ cd ai-widgets && npm install && npm start
 | `text` | `delta` | Приращение текста. **Не** накопленный текст — клиент склеивает сам |
 | `widget` | `variant`, `title`, `basedOn`, `html` | Агент выдал новую версию виджета |
 | `status` | `stage`, `variant?` | `widget-start` — начал собирать виджет; `fetching-variant` — тянет старый вариант |
-| `usage` | `contextTokens`, `budget`, `percent`, `cachedTokens?` | Один раз в конце хода |
+| `usage` | `contextTokens`, `budget`, `percent`, `cachedTokens?`, `reasoningTokens?` | Один раз в конце хода |
 | `limit` | `contextTokens`, `budget` | Бюджет исчерпан, модель не вызывалась |
 | `done` | `finished` | Ход завершён; `finished: true` — агент закрыл диалог |
 | `error` | `error` | Ошибка. Текст ключа наружу не отдаётся |

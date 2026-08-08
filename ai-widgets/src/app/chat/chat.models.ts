@@ -19,6 +19,7 @@ export type ChatStreamEvent =
       budget: number;
       percent: number;
       cachedTokens?: number;
+      reasoningTokens?: number;
     }
   | { type: 'limit'; contextTokens: number; budget: number }
   | { type: 'done'; finished: boolean }
@@ -46,6 +47,8 @@ export interface ContextInfo {
   percent: number;
   /** Сколько входных токенов пришло из неявного кеша Gemini */
   cachedTokens?: number;
+  /** Токены на размышления модели — заметны у семейства Gemini 3 */
+  reasoningTokens?: number;
 }
 
 export interface ChatMessage {

@@ -205,6 +205,7 @@ export class ChatComponent {
               budget: event.budget,
               percent: event.percent,
               cachedTokens: event.cachedTokens,
+              reasoningTokens: event.reasoningTokens,
             });
             this.checkContext(event.percent);
             break;
@@ -424,6 +425,10 @@ export class ChatComponent {
         ? `Из кеша: ${this.fmtTokens(ctx.cachedTokens)} токенов`
         : 'Из кеша: нет попаданий'
     );
+    // Размышления оплачиваются, но в контексте не остаются — у Gemini 3 заметны
+    if (ctx.reasoningTokens) {
+      parts.push(`На размышления: ${this.fmtTokens(ctx.reasoningTokens)} токенов`);
+    }
     return parts.join('\n');
   });
 
