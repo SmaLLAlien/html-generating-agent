@@ -1,7 +1,12 @@
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import type { EmitEvent } from './events.js';
-import { addVariant, getVariant, type ChatSession } from './sessions.js';
+import {
+  addVariant,
+  canAddVariant,
+  getVariant,
+  type ChatSession,
+} from './sessions.js';
 
 /** Подстраховка: вырезаем любой JavaScript, если проверка что-то пропустила */
 export function stripJavaScript(html: string): string {
@@ -82,6 +87,15 @@ export function buildTools(session: ChatSession, emit: EmitEvent): ToolSet {
       // HTML генерируется долго — сразу говорим клиенту, что идёт сборка
       onInputStart: () => emit({ type: 'status', stage: 'widget-start' }),
       execute: async ({ html, title, basedOn }, { toolCallId }) => {
+        if (!canAddVariant(session)) {
+          return {
+            ok: false as const,
+            problems: [
+              'достигнут предел числа вариантов в диалоге — предложи пользователю начать новый',
+            ],
+          };
+        }
+
         const problems = validateWidget(html);
         if (problems.length) {
           return { ok: false as const, problems };

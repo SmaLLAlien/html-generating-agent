@@ -29,22 +29,30 @@
         @if (phase() === 'chat') {
           <button
             class="btn header-btn"
+            [class.confirming]="pendingConfirm() === 'new'"
             [disabled]="busy()"
-            (click)="newDialog()"
-            title="Закрыть текущий диалог и начать новый"
+            (click)="confirmDestructive('new')"
+            title="Закрыть текущий диалог и начать новый — история и все варианты будут удалены"
           >
-            Новый
+            {{ pendingConfirm() === 'new' ? 'Точно?' : 'Новый' }}
           </button>
           <button
             class="btn header-btn"
-            [class.pulse]="canClose()"
+            [class.pulse]="canClose() && pendingConfirm() !== 'end'"
+            [class.confirming]="pendingConfirm() === 'end'"
             [disabled]="busy()"
-            (click)="endDialog()"
+            (click)="confirmDestructive('end')"
+            title="Завершить диалог — история и все варианты будут удалены"
           >
-            Завершить
+            {{ pendingConfirm() === 'end' ? 'Точно?' : 'Завершить' }}
           </button>
         }
-        <button class="icon-btn" (click)="togglePanel()" title="Свернуть">
+        <button
+          class="icon-btn"
+          (click)="togglePanel()"
+          aria-label="Свернуть чат"
+          title="Свернуть"
+        >
           —
         </button>
       </div>
@@ -58,6 +66,7 @@
             [ngModel]="modelId()"
             (ngModelChange)="changeModel($event)"
             [disabled]="busy()"
+            aria-label="Модель"
             [title]="
               currentModel()
                 ? currentModel()!.hint +
@@ -70,6 +79,10 @@
               <option [value]="m.id">{{ m.label }}</option>
             }
           </select>
+        } @else if (modelsError()) {
+          <button class="btn small ghost" (click)="retryLoadModels()">
+            Модели недоступны · обновить
+          </button>
         }
 
         @if (context(); as ctx) {
@@ -83,7 +96,14 @@
               >{{ fmtTokens(ctx.contextTokens) }} /
               {{ fmtTokens(ctx.budget) }} · {{ ctx.percent }}%</span
             >
-            <span class="ctx-bar">
+            <span
+              class="ctx-bar"
+              role="progressbar"
+              [attr.aria-valuenow]="contextPercent()"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-label="Заполненность контекста"
+            >
               <span class="ctx-fill" [style.width.%]="contextPercent()"></span>
             </span>
           </div>
@@ -117,7 +137,7 @@
           />
         </label>
         @if (setupError()) {
-          <p class="error-text">{{ setupError() }}</p>
+          <p class="error-text" role="alert">{{ setupError() }}</p>
         }
         <button
           class="btn primary"
@@ -134,104 +154,171 @@
         <div class="close-banner">✅ Виджет принят — диалог можно закрывать.</div>
       }
 
-      <div class="messages" #scrollBox>
-        <div class="day-chip">Сегодня</div>
+      <div class="messages-wrap">
+        <div
+          class="messages"
+          #scrollBox
+          (scroll)="onScroll()"
+          role="log"
+          aria-live="polite"
+          aria-label="Переписка с помощником"
+        >
+          <div class="day-chip">Сегодня</div>
 
-        @for (m of messages(); track $index) {
-          @if (m.notice) {
-            <div class="notice" [class.limit]="m.notice === 'limit'">
-              @if (m.notice === 'limit') {
-                <strong>Лимит контекста исчерпан.</strong>
-                Диалог стал слишком длинным — продолжить в нём нельзя.
-                Начните новый: история и варианты этого диалога будут удалены.
-                <button class="btn primary small" [disabled]="busy()" (click)="newDialog()">
-                  Начать новый диалог
-                </button>
-              } @else {
-                ⚠️ Контекст заполнен на {{ m.noticePercent }}%. Скоро
-                придётся начать новый диалог.
-              }
-            </div>
-          } @else {
-            <div class="msg" [class.user]="m.role === 'user'" [class.error]="m.error">
-              @if (m.role === 'assistant') {
-                <div class="msg-meta">Помощник</div>
-              }
-              <div class="row">
-                @if (m.role === 'assistant') {
-                  <div class="avatar">AI</div>
+          @for (m of messages(); track $index) {
+            @if (m.notice) {
+              <div
+                class="notice"
+                [class.limit]="m.notice === 'limit'"
+                [class.expired]="m.notice === 'expired'"
+                role="status"
+              >
+                @if (m.notice === 'limit') {
+                  <strong>Лимит контекста исчерпан.</strong>
+                  Диалог стал слишком длинным — продолжить в нём нельзя.
+                  Начните новый: история и варианты этого диалога будут удалены.
+                  <button
+                    class="btn primary small"
+                    [disabled]="busy()"
+                    (click)="newDialog()"
+                  >
+                    Начать новый диалог
+                  </button>
+                } @else if (m.notice === 'expired') {
+                  <strong>Диалог истёк.</strong>
+                  Сессия удалена на сервере после часа без активности.
+                  <button
+                    class="btn primary small"
+                    [disabled]="busy()"
+                    (click)="newDialog()"
+                  >
+                    Начать новый диалог
+                  </button>
+                } @else {
+                  ⚠️ Контекст заполнен на {{ m.noticePercent }}%. Скоро
+                  придётся начать новый диалог.
                 }
-                <div class="bubble">
-                  @if (m.streaming && !m.text && !m.widgetHtml) {
-                    <span class="typing">Помощник печатает…</span>
-                  } @else if (m.text) {
-                    <span class="text">{{ m.text }}</span>
+              </div>
+            } @else {
+              <div class="msg" [class.user]="m.role === 'user'" [class.error]="m.error">
+                @if (m.role === 'assistant') {
+                  <div class="msg-meta">Помощник</div>
+                }
+                <div class="row">
+                  @if (m.role === 'assistant') {
+                    <div class="avatar" aria-hidden="true">AI</div>
                   }
+                  <div class="bubble">
+                    @if (m.streaming && !m.text && !m.widgetHtml) {
+                      <span class="typing">Помощник печатает…</span>
+                    } @else if (m.text) {
+                      <span class="text">{{ m.text }}</span>
+                    }
 
-                  @if (m.buildingWidget && !m.widgetHtml) {
-                    <span class="typing building">Собираю виджет…</span>
-                  }
+                    @if (m.buildingWidget && !m.widgetHtml) {
+                      <span class="typing building">Собираю виджет…</span>
+                    }
 
-                  @if (m.widgetHtml) {
-                    <div class="widget-block">
-                      <div class="widget-preview">
-                        <iframe
-                          sandbox=""
-                          [srcdoc]="trustHtml(m.widgetHtml)"
-                          title="Превью виджета"
-                        ></iframe>
-                      </div>
+                    @if (m.truncated) {
+                      <span class="hint">
+                        ✂️ Ответ обрезан по лимиту длины — попросите продолжить.
+                      </span>
+                    }
 
-                      @if (m.variant) {
-                        <div class="variant-badge">
-                          <span class="variant-num">Вариант #{{ m.variant }}</span>
-                          @if (m.variantTitle) {
-                            <span class="variant-title">{{ m.variantTitle }}</span>
-                          }
-                          @if (m.basedOn) {
-                            <span class="variant-parent">на основе #{{ m.basedOn }}</span>
-                          }
+                    @if (m.widgetHtml) {
+                      <div class="widget-block">
+                        <div class="widget-preview" [class.expanded]="m.expanded">
+                          <iframe
+                            sandbox=""
+                            [srcdoc]="trustHtml(m.widgetHtml)"
+                            [title]="
+                              m.variant
+                                ? 'Превью варианта №' + m.variant
+                                : 'Превью виджета'
+                            "
+                          ></iframe>
                         </div>
-                      }
 
+                        @if (m.variant) {
+                          <div class="variant-badge">
+                            <span class="variant-num">Вариант #{{ m.variant }}</span>
+                            @if (m.variantTitle) {
+                              <span class="variant-title">{{ m.variantTitle }}</span>
+                            }
+                            @if (m.basedOn) {
+                              <span class="variant-parent">на основе #{{ m.basedOn }}</span>
+                            }
+                          </div>
+                        }
+
+                        <div class="widget-actions">
+                          <button
+                            class="btn primary small"
+                            [disabled]="busy() || m.accepted || canClose()"
+                            (click)="accept($index)"
+                          >
+                            {{ m.accepted ? 'Принято ✓' : 'Принять' }}
+                          </button>
+                          @if (m.variant) {
+                            <button
+                              class="btn small"
+                              [disabled]="busy() || inputBlocked()"
+                              (click)="revisit($index)"
+                              title="Взять этот вариант за основу"
+                            >
+                              Доработать
+                            </button>
+                          }
+                          <button
+                            class="btn small"
+                            (click)="toggleExpand($index)"
+                            [title]="m.expanded ? 'Свернуть превью' : 'Показать виджет крупнее'"
+                          >
+                            {{ m.expanded ? 'Свернуть' : 'Развернуть' }}
+                          </button>
+                          <button class="btn small" (click)="toggleCode($index)">
+                            {{ m.showCode ? 'Скрыть код' : 'Код' }}
+                          </button>
+                          <button
+                            class="btn small"
+                            [class.copied]="copiedIndex() === $index"
+                            (click)="copyCode(m.widgetHtml, $index)"
+                          >
+                            {{ copiedIndex() === $index ? 'Скопировано ✓' : 'Копировать' }}
+                          </button>
+                        </div>
+                        @if (m.showCode) {
+                          <pre class="code"><code>{{ m.widgetHtml }}</code></pre>
+                        }
+                      </div>
+                    }
+
+                    @if ((m.error || m.stopped) && m.retryable && failedTurn()) {
                       <div class="widget-actions">
                         <button
                           class="btn primary small"
-                          [disabled]="busy() || m.accepted || canClose()"
-                          (click)="accept($index)"
+                          [disabled]="busy() || inputBlocked()"
+                          (click)="retry()"
                         >
-                          {{ m.accepted ? 'Принято ✓' : 'Принять' }}
-                        </button>
-                        @if (m.variant) {
-                          <button
-                            class="btn small"
-                            [disabled]="busy() || limitReached()"
-                            (click)="revisit($index)"
-                            title="Взять этот вариант за основу"
-                          >
-                            Доработать
-                          </button>
-                        }
-                        <button class="btn small" (click)="toggleCode($index)">
-                          {{ m.showCode ? 'Скрыть код' : 'Код' }}
-                        </button>
-                        <button class="btn small" (click)="copyCode(m.widgetHtml)">
-                          Копировать
+                          Повторить
                         </button>
                       </div>
-                      @if (m.showCode) {
-                        <pre class="code"><code>{{ m.widgetHtml }}</code></pre>
-                      }
-                    </div>
-                  }
+                    }
 
-                  @if (m.time) {
-                    <span class="time">{{ m.time }}</span>
-                  }
+                    @if (m.time) {
+                      <span class="time">{{ m.time }}</span>
+                    }
+                  </div>
                 </div>
               </div>
-            </div>
+            }
           }
+        </div>
+
+        @if (hasNewBelow()) {
+          <button class="jump-latest" (click)="jumpToLatest()">
+            ↓ Новые сообщения
+          </button>
         }
       </div>
 
@@ -239,23 +326,37 @@
         <textarea
           rows="1"
           [placeholder]="
-            limitReached()
-              ? 'Лимит контекста исчерпан — начните новый диалог'
-              : 'Введите сообщение…'
+            sessionExpired()
+              ? 'Диалог истёк — начните новый'
+              : limitReached()
+                ? 'Лимит контекста исчерпан — начните новый диалог'
+                : 'Введите сообщение…   Shift+Enter — новая строка'
           "
           [ngModel]="input()"
           (ngModelChange)="input.set($event)"
           (keydown.enter)="$event.preventDefault(); send()"
-          [disabled]="busy() || limitReached()"
+          [disabled]="busy() || inputBlocked()"
+          aria-label="Сообщение помощнику"
         ></textarea>
-        <button
-          class="send-btn"
-          [disabled]="busy() || limitReached() || !input().trim()"
-          (click)="send()"
-          aria-label="Отправить"
-        >
-          ➤
-        </button>
+        @if (busy()) {
+          <button
+            class="send-btn stop"
+            (click)="stop()"
+            aria-label="Остановить генерацию"
+            title="Остановить"
+          >
+            ■
+          </button>
+        } @else {
+          <button
+            class="send-btn"
+            [disabled]="inputBlocked() || !input().trim()"
+            (click)="send()"
+            aria-label="Отправить"
+          >
+            ➤
+          </button>
+        }
       </footer>
     }
 

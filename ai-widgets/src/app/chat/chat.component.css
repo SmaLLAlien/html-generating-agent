@@ -559,7 +559,119 @@
   margin-top: 6px;
 }
 
+/* --- Лента и плашка «новые сообщения» --- */
+.messages-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.jump-latest {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--pb-green);
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+}
+
+/* --- Развёрнутое превью --- */
+.widget-preview.expanded iframe {
+  height: 70vh;
+  max-height: 620px;
+}
+
+.btn.copied {
+  background: #eef7e6;
+  color: #3d7d1c;
+}
+
+.btn.ghost {
+  background: transparent;
+  box-shadow: none;
+  color: var(--pb-muted);
+  text-decoration: underline;
+}
+
+.header-btn.confirming {
+  background: #fff;
+  color: #c5221f;
+  border-color: #fff;
+  font-weight: 600;
+}
+
+.send-btn.stop {
+  background: #c5221f;
+}
+
+.hint {
+  display: block;
+  margin-top: 6px;
+  color: var(--pb-muted);
+  font-size: 12px;
+}
+
+.notice.expired {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  background: #eef1f5;
+  border-color: #c9d2dd;
+  color: #33475e;
+}
+
+/* --- Видимый фокус: раньше outline снимался без замены --- */
+.composer textarea:focus-visible,
+.setup input:focus-visible,
+.model-select:focus-visible,
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.send-btn:focus-visible,
+.launcher:focus-visible {
+  outline: 2px solid var(--pb-green-dark);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .launcher,
+  .ctx-fill,
+  .pulse {
+    animation: none;
+    transition: none;
+  }
+}
+
 /* --- Мобильные --- */
+@media (max-width: 480px) {
+  /* Ниже 16px Safari принудительно зумит страницу при фокусе,
+     а панель position:fixed после зума уезжает за экран */
+  .composer textarea,
+  .setup input {
+    font-size: 16px;
+  }
+
+  .btn.small,
+  .header-btn {
+    padding: 10px 14px;
+    min-height: 40px;
+  }
+
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+}
+
 @media (max-width: 480px) {
   .panel {
     right: 8px;

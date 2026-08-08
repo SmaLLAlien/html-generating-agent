@@ -4,8 +4,10 @@ import {
   CONTEXT_BUDGET_TOKENS,
   CONTEXT_WARN_RATIO,
   MAX_AGENT_STEPS,
+  MAX_OUTPUT_TOKENS,
 } from './config.js';
 import type { EmitEvent } from './events.js';
+import { logError, logInfo, logWarn } from './log.js';
 import { evictOldWidgets } from './memory.js';
 import { callSettingsFor, resolveModel } from './models.js';
 import type { ChatSession, UserInfo } from './sessions.js';
@@ -100,18 +102,30 @@ export interface AgentTurnResult {
   finished: boolean;
   /** Сколько токенов займёт история на следующем вызове */
   contextTokens: number;
+  /** Ответ обрезан по лимиту токенов, а не закончен моделью */
+  truncated: boolean;
 }
 
 /**
  * Один ход агента. Текст стримится приращениями, виджет и завершение диалога
  * приезжают событиями из инструментов.
+ *
+ * `signal` прерывает генерацию, когда клиент отвалился или нажал «Стоп»:
+ * без него закрытая вкладка продолжала бы жечь токены до конца цикла.
  */
 export async function runAgent(
   session: ChatSession,
   userText: string,
-  emit: EmitEvent
+  emit: EmitEvent,
+  signal?: AbortSignal
 ): Promise<AgentTurnResult> {
   const userMessage: ModelMessage = { role: 'user', content: userText };
+  const ctx = {
+    sessionId: session.id,
+    ldap: session.user.ldap,
+    turn: session.turnCount + 1,
+    model: session.modelId,
+  };
 
   const result = streamText({
     model: resolveModel(session.modelId),
@@ -119,6 +133,8 @@ export async function runAgent(
     messages: [...session.messages, ...stateMessages(session), userMessage],
     tools: buildTools(session, emit),
     stopWhen: [stepCountIs(MAX_AGENT_STEPS), hasToolCall('finishDialog')],
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    abortSignal: signal,
     // temperature и настройки мышления зависят от поколения модели
     ...callSettingsFor(session.modelId),
   });
@@ -126,6 +142,7 @@ export async function runAgent(
   let finished = false;
   let emittedText = false;
   let textInStep = false;
+  let finishReason = '';
 
   for await (const part of result.fullStream) {
     switch (part.type) {
@@ -146,11 +163,55 @@ export async function runAgent(
         if (part.toolName === 'finishDialog') finished = true;
         break;
 
+      /**
+       * Падение инструмента SDK не бросает наружу, а кладёт в поток отдельной
+       * частью. Раньше она молча терялась: пользователь навсегда оставался
+       * со спиннером «Собираю виджет…», а в логах не было ничего.
+       */
+      case 'tool-error': {
+        const detail =
+          part.error instanceof Error ? part.error.message : String(part.error);
+        logError('tool.failed', ctx, { tool: part.toolName, detail });
+        emit({
+          type: 'error',
+          error: `Не удалось выполнить действие «${part.toolName}». Попробуйте повторить.`,
+          code: 'tool',
+          retryable: true,
+        });
+        break;
+      }
+
+      case 'finish':
+        finishReason = part.finishReason;
+        break;
+
+      case 'abort':
+        throw new DOMException('Генерация прервана', 'AbortError');
+
       case 'error':
         throw part.error instanceof Error
           ? part.error
           : new Error(String(part.error));
     }
+  }
+
+  /**
+   * Раньше finishReason не читался вовсе, и блокировка по безопасности
+   * выглядела как успешный пустой ответ.
+   */
+  if (finishReason === 'content-filter') {
+    logWarn('turn.blocked', ctx, { finishReason });
+    emit({
+      type: 'error',
+      error:
+        'Модель отказалась отвечать на этот запрос по правилам безопасности. Попробуйте переформулировать.',
+      code: 'safety',
+      retryable: false,
+    });
+  }
+  const truncated = finishReason === 'length';
+  if (truncated) {
+    logWarn('turn.truncated', ctx, { finishReason });
   }
 
   // Успех — фиксируем обмен в памяти агента.
@@ -163,10 +224,11 @@ export async function runAgent(
   // хода, чтобы уже следующий вызов ушёл с укороченной историей.
   const evicted = evictOldWidgets(session);
   if (evicted.evicted) {
-    console.log(
-      `[контекст] вытеснено ${evicted.evicted} фрагм., −${evicted.freedChars} симв.; ` +
-        `в контексте целиком: ${evicted.pinned.map((n) => '#' + n).join(', ')}`
-    );
+    logInfo('context.evicted', ctx, {
+      fragments: evicted.evicted,
+      freedChars: evicted.freedChars,
+      pinned: evicted.pinned.join(','),
+    });
   }
 
   // ВАЖНО: usage (последний шаг), а не totalUsage (сумма по всем шагам).
@@ -190,11 +252,13 @@ export async function runAgent(
   // reasoningTokens приходит undefined. Две метрики — два источника:
   // размер истории берём с последнего шага, стоимость размышлений — со всех.
   const reasoningTokens = (await result.totalUsage).reasoningTokens ?? 0;
-  console.log(
-    `[контекст] ход ${session.turnCount}: ${contextTokens} токенов` +
-      (cachedTokens ? `, из них из кеша ${cachedTokens}` : ', кеш не сработал') +
-      (reasoningTokens ? `; на размышления ${reasoningTokens}` : '')
-  );
+  logInfo('turn.done', ctx, {
+    contextTokens,
+    cachedTokens,
+    reasoningTokens,
+    finishReason,
+    variants: session.variants.length,
+  });
 
   emit({
     type: 'usage',
@@ -205,7 +269,35 @@ export async function runAgent(
     reasoningTokens,
   });
 
-  return { finished, contextTokens };
+  return { finished, contextTokens, truncated };
+}
+
+/**
+ * Ход оборвался: сеть, прерывание, ошибка провайдера.
+ *
+ * Раньше в этом случае в историю не попадало вообще ничего — а вариант,
+ * созданный инструментом до сбоя, уже был показан пользователю и остался в
+ * реестре. Модель о нём не знала: на следующем ходу каталог сообщал про
+ * «текущий вариант #N», которого нет в её собственной истории.
+ *
+ * Поэтому фиксируем сообщение пользователя и короткую пометку о том, что
+ * произошло. История остаётся согласованной с тем, что видит пользователь.
+ */
+export function recordFailedTurn(
+  session: ChatSession,
+  userText: string,
+  createdVariants: number[]
+): void {
+  const note = createdVariants.length
+    ? `[Ход прерван] Ответ не был закончен. Успел создать вариант(ы) ${createdVariants
+        .map((n) => '#' + n)
+        .join(', ')} — пользователь их видит. Полный код доступен через getVariant.`
+    : '[Ход прерван] Ответ не был закончен, виджет не создан.';
+
+  session.messages.push(
+    { role: 'user', content: userText },
+    { role: 'assistant', content: note }
+  );
 }
 
 /**

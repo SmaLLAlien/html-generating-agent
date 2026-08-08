@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
+import { MAX_SESSIONS, MAX_VARIANTS_PER_SESSION } from './config.js';
 import { DEFAULT_MODEL_ID } from './models.js';
 
 export interface UserInfo {
@@ -47,6 +48,11 @@ export interface ChatSession {
   contextTokens: number;
   /** Сколько ходов сделано в диалоге — агент видит это число и реже ходит по кругу */
   turnCount: number;
+  /**
+   * В сессии сейчас идёт ход. Два параллельных запроса перемешали бы историю
+   * и разъехались бы на счётчиках, поэтому второй отклоняем.
+   */
+  busy: boolean;
   createdAt: number;
   lastActivityAt: number;
 }
@@ -58,7 +64,25 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 const sessions = new Map<string, ChatSession>();
 
+/**
+ * Вытесняем самую давно неактивную сессию. Создание сессии не требует
+ * аутентификации, поэтому без потолка цикл запросов просто съедает память.
+ */
+function evictOldestSession(): void {
+  let oldestId: string | null = null;
+  let oldestAt = Infinity;
+  for (const [id, s] of sessions) {
+    if (s.lastActivityAt < oldestAt) {
+      oldestAt = s.lastActivityAt;
+      oldestId = id;
+    }
+  }
+  if (oldestId) sessions.delete(oldestId);
+}
+
 export function createSession(user: UserInfo): ChatSession {
+  if (sessions.size >= MAX_SESSIONS) evictOldestSession();
+
   const now = Date.now();
   const session: ChatSession = {
     id: randomUUID(),
@@ -69,11 +93,16 @@ export function createSession(user: UserInfo): ChatSession {
     modelId: DEFAULT_MODEL_ID,
     contextTokens: 0,
     turnCount: 0,
+    busy: false,
     createdAt: now,
     lastActivityAt: now,
   };
   sessions.set(session.id, session);
   return session;
+}
+
+export function sessionCount(): number {
+  return sessions.size;
 }
 
 export function getSession(id: string): ChatSession | undefined {
@@ -89,6 +118,11 @@ export function deleteSession(id: string): boolean {
 }
 
 /** Зарегистрировать новый вариант и выдать ему номер. Номер присваивает сервер. */
+/** Есть ли ещё место под вариант — проверяется до вызова addVariant */
+export function canAddVariant(session: ChatSession): boolean {
+  return session.variants.length < MAX_VARIANTS_PER_SESSION;
+}
+
 export function addVariant(
   session: ChatSession,
   data: {

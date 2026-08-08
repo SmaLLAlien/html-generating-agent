@@ -9,10 +9,18 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ChatMessage, ContextInfo, ModelInfo } from './chat.models';
-import { ChatService, SendBody } from './chat.service';
+import {
+  ChatMessage,
+  ContextInfo,
+  FailedTurn,
+  ModelInfo,
+} from './chat.models';
+import { ChatHttpError, ChatService, SendBody } from './chat.service';
 
 type Phase = 'setup' | 'chat' | 'closed';
+
+/** Насколько близко к низу нужно быть, чтобы автоскролл считался желанным */
+const STICK_TO_BOTTOM_PX = 80;
 
 @Component({
   selector: 'app-chat',
@@ -29,6 +37,10 @@ export class ChatComponent {
   private sessionId: string | null = null;
   /** Предупреждение о 80% показываем один раз на диалог */
   private warnShown = false;
+  /** Прерывание текущего хода: кнопка «Стоп» и закрытие панели */
+  private abortCtrl: AbortController | null = null;
+  private confirmTimer: ReturnType<typeof setTimeout> | null = null;
+  private copyTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly open = signal(false);
   readonly phase = signal<Phase>('setup');
@@ -41,10 +53,23 @@ export class ChatComponent {
   readonly setupError = signal('');
 
   readonly models = signal<ModelInfo[]>([]);
+  readonly modelsError = signal('');
   readonly modelId = signal('');
   readonly context = signal<ContextInfo | null>(null);
   readonly limitReached = signal(false);
-  private warnRatio = 0.8;
+  /** Сессия истекла на сервере — продолжать в ней нельзя */
+  readonly sessionExpired = signal(false);
+  /** Последний упавший ход: даёт кнопку «Повторить» без перенабора */
+  readonly failedTurn = signal<FailedTurn | null>(null);
+  /** Пользователь отвёл ленту от низа — автоскролл не мешаем */
+  readonly stuckToBottom = signal(true);
+  readonly hasNewBelow = signal(false);
+  /** Двухшаговое подтверждение необратимых действий */
+  readonly pendingConfirm = signal<'new' | 'end' | null>(null);
+  readonly copiedIndex = signal<number | null>(null);
+
+  /** Порог предупреждения приходит с сервера; сигнал, иначе computed не пересчитается */
+  private readonly warnRatio = signal(0.8);
 
   readonly currentModel = computed(() =>
     this.models().find((m) => m.id === this.modelId())
@@ -58,28 +83,42 @@ export class ChatComponent {
   readonly contextLevel = computed(() => {
     const percent = this.context()?.percent ?? 0;
     if (percent >= 100) return 'danger';
-    if (percent >= this.warnRatio * 100) return 'warn';
+    if (percent >= this.warnRatio() * 100) return 'warn';
     return 'ok';
   });
+
+  /** Ввод заблокирован — по лимиту контекста или потому что сессии больше нет */
+  readonly inputBlocked = computed(
+    () => this.limitReached() || this.sessionExpired()
+  );
 
   constructor() {
     void this.loadModels();
   }
 
   private async loadModels(): Promise<void> {
+    this.modelsError.set('');
     try {
       const data = await this.chat.listModels();
       this.models.set(data.models);
-      this.warnRatio = data.warnRatio;
+      this.warnRatio.set(data.warnRatio);
       if (!this.modelId()) this.modelId.set(data.defaultModelId);
-    } catch {
-      /* список моделей не критичен — селектор просто не появится */
+    } catch (err) {
+      // Раньше ошибка глушилась и селектор просто не появлялся —
+      // отличить это от «сборки без выбора модели» было нельзя
+      this.modelsError.set(
+        err instanceof Error ? err.message : 'Модели недоступны'
+      );
     }
+  }
+
+  retryLoadModels(): void {
+    void this.loadModels();
   }
 
   togglePanel(): void {
     this.open.update((v) => !v);
-    if (this.open()) this.scrollDown();
+    if (this.open()) this.scrollDown(true);
   }
 
   async startSession(): Promise<void> {
@@ -115,8 +154,12 @@ export class ChatComponent {
     ]);
     this.canClose.set(false);
     this.limitReached.set(false);
+    this.sessionExpired.set(false);
+    this.failedTurn.set(null);
     this.context.set(null);
     this.warnShown = false;
+    this.stuckToBottom.set(true);
+    this.hasNewBelow.set(false);
     this.safeHtmlCache.clear();
   }
 
@@ -127,14 +170,18 @@ export class ChatComponent {
     if (!this.sessionId) return;
     try {
       await this.chat.setModel(this.sessionId, modelId);
-    } catch {
+    } catch (err) {
       this.modelId.set(previous);
+      // Молчаливый откат селектора выглядел как баг интерфейса
+      this.pushSystemMessage(
+        err instanceof Error ? err.message : 'Не удалось сменить модель'
+      );
     }
   }
 
   async send(): Promise<void> {
     const text = this.input().trim();
-    if (!text || this.limitReached()) return;
+    if (!text || this.inputBlocked()) return;
     this.input.set('');
     await this.exchange({ text }, text);
   }
@@ -145,17 +192,24 @@ export class ChatComponent {
     this.messages.update((list) =>
       list.map((m, i) => (i === index ? { ...m, accepted: true } : m))
     );
-    await this.exchange(
+    const ok = await this.exchange(
       { action: 'accept', variant },
       variant != null
         ? `Принимаю вариант #${variant} ✅`
         : 'Принимаю этот виджет ✅'
     );
+    // Ход не прошёл — снимаем оптимистичную отметку, иначе кнопка навсегда
+    // остаётся «Принято ✓», хотя сервер об этом не знает
+    if (!ok) {
+      this.messages.update((list) =>
+        list.map((m, i) => (i === index ? { ...m, accepted: false } : m))
+      );
+    }
   }
 
   /** Взять старый вариант за основу — детерминированно, по номеру */
   async revisit(index: number): Promise<void> {
-    if (this.busy() || this.limitReached()) return;
+    if (this.busy() || this.inputBlocked()) return;
     const variant = this.messages()[index]?.variant;
     if (variant == null) return;
     const comment = this.input().trim();
@@ -168,12 +222,26 @@ export class ChatComponent {
     );
   }
 
+  /** Повторить упавший ход — без перенабора сообщения */
+  async retry(): Promise<void> {
+    const turn = this.failedTurn();
+    if (!turn || this.busy() || this.inputBlocked()) return;
+    this.failedTurn.set(null);
+    await this.exchange(turn.body, turn.shownText);
+  }
+
+  /** Прервать генерацию. Сервер увидит закрытие соединения и остановит модель */
+  stop(): void {
+    this.abortCtrl?.abort();
+  }
+
   private async exchange(
     body: SendBody,
     shownUserText: string
-  ): Promise<void> {
-    if (this.busy() || !this.sessionId) return;
+  ): Promise<boolean> {
+    if (this.busy() || !this.sessionId) return false;
     this.busy.set(true);
+    this.failedTurn.set(null);
 
     this.messages.update((list) => [
       ...list,
@@ -182,72 +250,150 @@ export class ChatComponent {
     ]);
     this.scrollDown();
 
+    const abort = new AbortController();
+    this.abortCtrl = abort;
+    let ok = true;
+
     try {
-      await this.chat.streamMessage(this.sessionId, body, (event) => {
-        switch (event.type) {
-          case 'text':
-            this.appendText(event.delta);
-            break;
+      await this.chat.streamMessage(
+        this.sessionId,
+        body,
+        (event) => {
+          switch (event.type) {
+            case 'text':
+              this.appendText(event.delta);
+              break;
 
-          case 'status':
-            if (event.stage === 'widget-start') {
-              this.patchLast({ buildingWidget: true });
-            }
-            break;
+            case 'status':
+              if (event.stage === 'widget-start') {
+                this.patchLast({ buildingWidget: true });
+              }
+              break;
 
-          case 'widget':
-            this.attachWidget(event);
-            break;
+            case 'widget':
+              this.attachWidget(event);
+              break;
 
-          case 'usage':
-            this.context.set({
-              contextTokens: event.contextTokens,
-              budget: event.budget,
-              percent: event.percent,
-              cachedTokens: event.cachedTokens,
-              reasoningTokens: event.reasoningTokens,
-            });
-            this.checkContext(event.percent);
-            break;
+            case 'usage':
+              this.context.set({
+                contextTokens: event.contextTokens,
+                budget: event.budget,
+                percent: event.percent,
+                cachedTokens: event.cachedTokens,
+                reasoningTokens: event.reasoningTokens,
+              });
+              this.checkContext(event.percent);
+              break;
 
-          case 'limit':
-            this.context.set({
-              contextTokens: event.contextTokens,
-              budget: event.budget,
-              percent: 100,
-            });
-            this.limitReached.set(true);
-            this.pushNotice('limit');
-            break;
+            case 'limit':
+              this.context.set({
+                contextTokens: event.contextTokens,
+                budget: event.budget,
+                percent: 100,
+              });
+              this.limitReached.set(true);
+              this.pushNotice('limit');
+              break;
 
-          case 'done':
-            if (event.finished) this.canClose.set(true);
-            break;
+            case 'done':
+              if (event.finished) this.canClose.set(true);
+              if (event.truncated) this.patchLast({ truncated: true });
+              break;
 
-          case 'error':
-            this.patchLast({
-              text: event.error,
-              error: true,
-              streaming: false,
-              buildingWidget: false,
-            });
-            break;
-        }
-        this.scrollDown();
-      });
+            case 'error':
+              ok = false;
+              this.showStreamError(event.error, event.retryable, body, shownUserText);
+              break;
+          }
+          this.scrollDown();
+        },
+        abort.signal
+      );
     } catch (err) {
-      this.patchLast({
-        text:
-          err instanceof Error ? err.message : 'Ошибка соединения с сервером',
-        error: true,
-        streaming: false,
-      });
+      ok = false;
+      this.handleTurnFailure(err, body, shownUserText);
     } finally {
+      this.abortCtrl = null;
       this.patchLast({ streaming: false, buildingWidget: false });
       this.dropEmptyTail();
       this.busy.set(false);
       this.scrollDown();
     }
+    return ok;
+  }
+
+  /**
+   * Ошибка пришла событием внутри потока. Уже полученный текст сохраняем —
+   * раньше он затирался сообщением об ошибке целиком.
+   */
+  private showStreamError(
+    text: string,
+    retryable: boolean,
+    body: SendBody,
+    shownText: string
+  ): void {
+    const last = this.messages().at(-1);
+    const prefix = last?.text ? `${last.text}\n\n` : '';
+    this.patchLast({
+      text: `${prefix}⚠️ ${text}`,
+      error: true,
+      retryable,
+      streaming: false,
+      buildingWidget: false,
+    });
+    if (retryable) this.failedTurn.set({ body, shownText });
+  }
+
+  private handleTurnFailure(
+    err: unknown,
+    body: SendBody,
+    shownText: string
+  ): void {
+    // Прерывание пользователем — не ошибка, помечаем как остановленный ход
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      const last = this.messages().at(-1);
+      this.patchLast({
+        text: last?.text ? `${last.text}\n\n⏹ Остановлено.` : '⏹ Остановлено.',
+        stopped: true,
+        retryable: true,
+        streaming: false,
+        buildingWidget: false,
+      });
+      this.failedTurn.set({ body, shownText });
+      return;
+    }
+
+    // Сессии больше нет: раньше каждая следующая отправка повторяла ту же
+    // ошибку бесконечно, потому что sessionId не сбрасывался
+    if (err instanceof ChatHttpError && err.status === 404) {
+      this.sessionId = null;
+      this.sessionExpired.set(true);
+      this.patchLast({
+        text: '⚠️ Диалог истёк — сервер уже удалил его историю.',
+        error: true,
+        streaming: false,
+      });
+      this.pushNotice('expired');
+      return;
+    }
+
+    const retryable =
+      err instanceof ChatHttpError ? err.retryable : true;
+    const text =
+      err instanceof ChatHttpError
+        ? err.message
+        : 'Не удалось связаться с сервером. Проверьте соединение.';
+
+    const last = this.messages().at(-1);
+    const prefix = last?.text ? `${last.text}\n\n` : '';
+    this.patchLast({
+      text: `${prefix}⚠️ ${text}`,
+      error: true,
+      retryable,
+      streaming: false,
+      buildingWidget: false,
+    });
+    if (retryable) this.failedTurn.set({ body, shownText });
   }
 
   private attachWidget(event: {
@@ -282,13 +428,13 @@ export class ChatComponent {
       this.pushNotice('limit');
       return;
     }
-    if (percent >= this.warnRatio * 100 && !this.warnShown) {
+    if (percent >= this.warnRatio() * 100 && !this.warnShown) {
       this.warnShown = true;
       this.pushNotice('warn');
     }
   }
 
-  private pushNotice(kind: 'warn' | 'limit'): void {
+  private pushNotice(kind: 'warn' | 'limit' | 'expired'): void {
     // Не дублируем одну и ту же плашку подряд
     if (this.messages().at(-1)?.notice === kind) return;
     this.messages.update((list) => [
@@ -303,7 +449,34 @@ export class ChatComponent {
     ]);
   }
 
+  private pushSystemMessage(text: string): void {
+    this.messages.update((list) => [
+      ...list,
+      { role: 'assistant', text: `⚠️ ${text}`, error: true, time: this.now() },
+    ]);
+    this.scrollDown();
+  }
+
+  /** Первый клик спрашивает, второй выполняет — необратимое не должно быть в один тап */
+  confirmDestructive(action: 'new' | 'end'): void {
+    if (this.pendingConfirm() === action) {
+      this.clearConfirm();
+      void (action === 'new' ? this.newDialog() : this.endDialog());
+      return;
+    }
+    this.pendingConfirm.set(action);
+    if (this.confirmTimer) clearTimeout(this.confirmTimer);
+    this.confirmTimer = setTimeout(() => this.pendingConfirm.set(null), 4000);
+  }
+
+  private clearConfirm(): void {
+    if (this.confirmTimer) clearTimeout(this.confirmTimer);
+    this.confirmTimer = null;
+    this.pendingConfirm.set(null);
+  }
+
   async endDialog(): Promise<void> {
+    this.stop();
     await this.dropSession();
     this.phase.set('closed');
   }
@@ -329,7 +502,7 @@ export class ChatComponent {
       this.phase.set('setup');
     } finally {
       this.busy.set(false);
-      this.scrollDown();
+      this.scrollDown(true);
     }
   }
 
@@ -354,12 +527,29 @@ export class ChatComponent {
     );
   }
 
-  async copyCode(html: string): Promise<void> {
+  /** Превью 200px — замочная скважина для виджета под нормальный экран */
+  toggleExpand(index: number): void {
+    this.messages.update((list) =>
+      list.map((m, i) => (i === index ? { ...m, expanded: !m.expanded } : m))
+    );
+  }
+
+  async copyCode(html: string, index: number): Promise<void> {
     try {
       await navigator.clipboard.writeText(html);
+      this.flashCopied(index);
     } catch {
-      /* буфер обмена недоступен (например, не HTTPS) */
+      // На не-HTTPS буфер недоступен, и раньше провал выглядел как успех
+      this.pushSystemMessage(
+        'Буфер обмена недоступен. Откройте блок «Код» и скопируйте вручную.'
+      );
     }
+  }
+
+  private flashCopied(index: number): void {
+    this.copiedIndex.set(index);
+    if (this.copyTimer) clearTimeout(this.copyTimer);
+    this.copyTimer = setTimeout(() => this.copiedIndex.set(null), 2000);
   }
 
   trustHtml(html: string): SafeHtml {
@@ -369,6 +559,22 @@ export class ChatComponent {
       this.safeHtmlCache.set(html, safe);
     }
     return safe;
+  }
+
+  /** Пользователь листает историю — запоминаем, чтобы не дёргать его вниз */
+  onScroll(): void {
+    const el = this.scrollBox()?.nativeElement;
+    if (!el) return;
+    const atBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_TO_BOTTOM_PX;
+    this.stuckToBottom.set(atBottom);
+    if (atBottom) this.hasNewBelow.set(false);
+  }
+
+  jumpToLatest(): void {
+    this.stuckToBottom.set(true);
+    this.hasNewBelow.set(false);
+    this.scrollDown(true);
   }
 
   private appendText(delta: string): void {
@@ -407,6 +613,13 @@ export class ChatComponent {
     });
   }
 
+  private now(): string {
+    return new Date().toLocaleTimeString('ru-RU', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
   /** Подсказка под полосой контекста: бюджет, окно модели и попадания в кеш */
   readonly contextTooltip = computed(() => {
     const ctx = this.context();
@@ -441,14 +654,16 @@ export class ChatComponent {
     return String(value);
   }
 
-  private now(): string {
-    return new Date().toLocaleTimeString('ru-RU', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  }
-
-  private scrollDown(): void {
+  /**
+   * Прокрутка вниз. `force` — по явному действию пользователя; в остальных
+   * случаях уважаем то, что он мог отлистать ленту вверх, чтобы перечитать
+   * старый вариант: раньше следующая же дельта возвращала его вниз.
+   */
+  private scrollDown(force = false): void {
+    if (!force && !this.stuckToBottom()) {
+      this.hasNewBelow.set(true);
+      return;
+    }
     setTimeout(() => {
       const el = this.scrollBox()?.nativeElement;
       if (el) el.scrollTop = el.scrollHeight;

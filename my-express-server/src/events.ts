@@ -4,6 +4,21 @@
  * Контракт v2: текст едет приращениями (`text`), а виджет — отдельным событием,
  * потому что он больше не поле JSON-ответа, а результат вызова инструмента.
  */
+
+/**
+ * Причина ошибки. Клиент по ней решает, показывать ли кнопку «Повторить»
+ * и что советовать пользователю: раньше все сбои выглядели одинаково.
+ */
+export type ErrorCode =
+  | 'rate-limit' // 429 от провайдера, помогает подождать
+  | 'safety' // модель отказалась по правилам безопасности
+  | 'auth' // ключ не задан или не принят
+  | 'model' // модель недоступна или снята с обслуживания
+  | 'network' // сеть или таймаут провайдера
+  | 'tool' // упал инструмент агента
+  | 'busy' // в этой сессии уже идёт ход
+  | 'unknown';
+
 export type AgentEvent =
   /** Приращение текста ответа (не весь текст целиком) */
   | { type: 'text'; delta: string }
@@ -34,8 +49,13 @@ export type AgentEvent =
     }
   /** Бюджет контекста исчерпан — диалог дальше не продолжаем */
   | { type: 'limit'; contextTokens: number; budget: number }
-  /** Ход завершён. finished = агент вызвал finishDialog */
-  | { type: 'done'; finished: boolean }
-  | { type: 'error'; error: string };
+  /**
+   * Ход завершён.
+   * `finished` — агент вызвал finishDialog.
+   * `truncated` — ответ обрезан по лимиту токенов, а не закончен моделью.
+   */
+  | { type: 'done'; finished: boolean; truncated?: boolean }
+  /** Ошибка. `retryable` — есть ли смысл предлагать «Повторить» */
+  | { type: 'error'; error: string; code: ErrorCode; retryable: boolean };
 
 export type EmitEvent = (event: AgentEvent) => void;

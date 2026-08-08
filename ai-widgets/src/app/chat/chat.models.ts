@@ -1,3 +1,14 @@
+/** Причина ошибки — зеркало ErrorCode на сервере */
+export type ErrorCode =
+  | 'rate-limit'
+  | 'safety'
+  | 'auth'
+  | 'model'
+  | 'network'
+  | 'tool'
+  | 'busy'
+  | 'unknown';
+
 /** События SSE-потока (зеркало AgentEvent на сервере) */
 export type ChatStreamEvent =
   | { type: 'text'; delta: string }
@@ -22,8 +33,8 @@ export type ChatStreamEvent =
       reasoningTokens?: number;
     }
   | { type: 'limit'; contextTokens: number; budget: number }
-  | { type: 'done'; finished: boolean }
-  | { type: 'error'; error: string };
+  | { type: 'done'; finished: boolean; truncated?: boolean }
+  | { type: 'error'; error: string; code: ErrorCode; retryable: boolean };
 
 export interface ModelInfo {
   id: string;
@@ -51,6 +62,12 @@ export interface ContextInfo {
   reasoningTokens?: number;
 }
 
+/** Что нужно, чтобы повторить упавший ход, ничего не переспрашивая */
+export interface FailedTurn {
+  body: { text?: string; action?: 'accept' | 'revisit'; variant?: number };
+  shownText: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
@@ -62,14 +79,22 @@ export interface ChatMessage {
   basedOn?: number | null;
   /** «Принять» нажато для виджета этого сообщения */
   accepted?: boolean;
+  /** Превью развёрнуто на всю высоту */
+  expanded?: boolean;
   streaming?: boolean;
   /** Модель собирает виджет — показываем индикацию */
   buildingWidget?: boolean;
   error?: boolean;
+  /** Ход прерван пользователем — это не ошибка, но повторить тоже надо дать */
+  stopped?: boolean;
+  /** Ход можно повторить — показываем кнопку */
+  retryable?: boolean;
+  /** Ответ обрезан по лимиту токенов */
+  truncated?: boolean;
   /** Блок кода развёрнут */
   showCode?: boolean;
-  /** Служебная плашка в ленте (предупреждение о контексте, лимит) */
-  notice?: 'warn' | 'limit';
+  /** Служебная плашка в ленте (предупреждение о контексте, лимит, истёкшая сессия) */
+  notice?: 'warn' | 'limit' | 'expired';
   /** Процент на момент появления плашки — иначе она «переписывается» задним числом */
   noticePercent?: number;
   time?: string;

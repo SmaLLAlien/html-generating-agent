@@ -41,6 +41,10 @@ cd ai-widgets && npm install && npm start
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Модель по умолчанию. Игнорируется, если id нет в реестре `src/models.ts` |
 | `CONTEXT_BUDGET_TOKENS` | `300000` | Рабочий бюджет контекста. На 80% предупреждение, на 100% диалог блокируется |
 | `MAX_AGENT_STEPS` | `6` | Максимум шагов агентного цикла за один ход пользователя |
+| `MAX_OUTPUT_TOKENS` | `32000` | Потолок выходных токенов на шаг |
+| `MAX_SESSIONS` | `500` | Потолок сессий в памяти; при переполнении вытесняется самая давняя |
+| `MAX_VARIANTS_PER_SESSION` | `50` | Потолок вариантов в одном диалоге |
+| `MAX_MESSAGE_LENGTH` | `8000` | Длина сообщения пользователя, символов (лишнее обрезается) |
 | `PORT` | `3000` | Порт сервера. При смене поправьте `ai-widgets/proxy.conf.json` |
 
 Менять значения на лету нельзя — `dotenv` читает файл только при запуске, а `tsx watch`
@@ -117,8 +121,11 @@ cd ai-widgets && npm install && npm start
 | `status` | `stage`, `variant?` | `widget-start` — начал собирать виджет; `fetching-variant` — тянет старый вариант |
 | `usage` | `contextTokens`, `budget`, `percent`, `cachedTokens?`, `reasoningTokens?` | Один раз в конце хода |
 | `limit` | `contextTokens`, `budget` | Бюджет исчерпан, модель не вызывалась |
-| `done` | `finished` | Ход завершён; `finished: true` — агент закрыл диалог |
-| `error` | `error` | Ошибка. Текст ключа наружу не отдаётся |
+| `done` | `finished`, `truncated?` | Ход завершён; `finished: true` — агент закрыл диалог; `truncated: true` — ответ обрезан по лимиту длины |
+| `error` | `error`, `code`, `retryable` | Ошибка. `code`: `rate-limit` / `safety` / `auth` / `model` / `network` / `tool` / `unknown`. Внутренние детали наружу не отдаются |
+
+Ошибки до открытия потока приходят обычным JSON: `404` — сессии нет, `400` — неверное
+тело, `409` — в этой сессии уже идёт ответ, `413` — тело больше 1 МБ.
 
 ## Известные ограничения
 

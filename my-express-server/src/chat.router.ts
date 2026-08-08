@@ -1,7 +1,13 @@
 import { Router, type Request, type Response } from 'express';
-import { runAgent } from './agent.js';
-import { CONTEXT_BUDGET_TOKENS, CONTEXT_WARN_RATIO } from './config.js';
+import { recordFailedTurn, runAgent } from './agent.js';
+import {
+  CONTEXT_BUDGET_TOKENS,
+  CONTEXT_WARN_RATIO,
+  MAX_MESSAGE_LENGTH,
+} from './config.js';
+import { classifyError, isAbort } from './errors.js';
 import type { AgentEvent } from './events.js';
+import { logError, logInfo, logWarn } from './log.js';
 import { DEFAULT_MODEL_ID, MODELS, isKnownModel } from './models.js';
 import {
   createSession,
@@ -9,6 +15,7 @@ import {
   getSession,
   getVariant,
   markAccepted,
+  sessionCount,
 } from './sessions.js';
 
 export const chatRouter = Router();
@@ -40,9 +47,13 @@ chatRouter.post('/session', (req: Request, res: Response) => {
     return;
   }
 
+  // Данные попадают в системный промпт, поэтому длину ограничиваем
   const session = createSession({
-    ldap: ldap.trim(),
-    fullName: fullName.trim(),
+    ldap: ldap.trim().slice(0, 120),
+    fullName: fullName.trim().slice(0, 200),
+  });
+  logInfo('session.created', { sessionId: session.id, ldap: session.user.ldap }, {
+    total: sessionCount(),
   });
   res.status(201).json({ sessionId: session.id, modelId: session.modelId });
 });
@@ -61,7 +72,12 @@ chatRouter.patch('/:sessionId/model', (req: Request, res: Response) => {
     return;
   }
 
+  const previous = session.modelId;
   session.modelId = modelId;
+  logInfo('model.changed', { sessionId: session.id, ldap: session.user.ldap }, {
+    from: previous,
+    to: modelId,
+  });
   res.json({ modelId });
 });
 
@@ -70,7 +86,7 @@ chatRouter.patch('/:sessionId/model', (req: Request, res: Response) => {
  * Тело: { text } | { action: 'accept', variant } | { action: 'revisit', variant, text }
  *
  * Ответ — SSE-поток событий (см. AgentEvent в events.ts):
- *   text / widget / status / usage / done / error
+ *   text / widget / status / usage / limit / done / error
  */
 chatRouter.post('/:sessionId/message', async (req: Request, res: Response) => {
   const session = getSession(req.params.sessionId as string);
@@ -79,21 +95,34 @@ chatRouter.post('/:sessionId/message', async (req: Request, res: Response) => {
     return;
   }
 
+  const ctx = { sessionId: session.id, ldap: session.user.ldap };
+
   const { text, action, variant } = (req.body ?? {}) as {
     text?: unknown;
     action?: unknown;
     variant?: unknown;
   };
 
-  const variantNumber = typeof variant === 'number' ? variant : null;
-  const userComment = typeof text === 'string' ? text.trim() : '';
+  const variantNumber =
+    typeof variant === 'number' && Number.isInteger(variant) && variant > 0
+      ? variant
+      : null;
+  const userComment =
+    typeof text === 'string' ? text.trim().slice(0, MAX_MESSAGE_LENGTH) : '';
 
+  // Приняли вариант — но пометку ставим только если он существует,
+  // иначе агенту уходило сообщение про несуществующий номер
+  let acceptedVariant: number | null = null;
   let userText: string;
+
   if (action === 'accept') {
-    if (variantNumber != null) markAccepted(session, variantNumber);
+    acceptedVariant =
+      variantNumber != null && getVariant(session, variantNumber)
+        ? variantNumber
+        : null;
     userText =
       '[Системное событие] Пользователь нажал кнопку «Принять»' +
-      (variantNumber != null ? ` под вариантом #${variantNumber}` : '') +
+      (acceptedVariant != null ? ` под вариантом #${acceptedVariant}` : '') +
       '. Виджет одобрен.';
   } else if (action === 'revisit') {
     if (variantNumber == null || !getVariant(session, variantNumber)) {
@@ -111,12 +140,22 @@ chatRouter.post('/:sessionId/message', async (req: Request, res: Response) => {
     return;
   }
 
+  // Два параллельных хода в одной сессии перемешали бы историю и разъехались
+  // бы на счётчиках вариантов и токенов
+  if (session.busy) {
+    res.status(409).json({ error: 'В этом диалоге уже идёт ответ' });
+    return;
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  // nginx по умолчанию буферизует proxy_pass и съедает стриминг
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
   const send = (event: AgentEvent) => {
+    if (res.writableEnded || res.destroyed) return;
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
@@ -132,25 +171,58 @@ chatRouter.post('/:sessionId/message', async (req: Request, res: Response) => {
     return;
   }
 
+  const abort = new AbortController();
+  // Клиент закрыл вкладку или нажал «Стоп» — прекращаем генерацию.
+  // Без этого модель дописывала ответ в никуда, а токены списывались.
+  const onClose = () => abort.abort();
+  res.on('close', onClose);
+
+  // Какие варианты создал этот ход — нужно на случай обрыва
+  const variantsBefore = session.variants.length;
+
+  session.busy = true;
   try {
-    const { finished } = await runAgent(session, userText, send);
-    send({ type: 'done', finished });
+    const { finished, truncated } = await runAgent(
+      session,
+      userText,
+      send,
+      abort.signal
+    );
+    if (acceptedVariant != null) markAccepted(session, acceptedVariant);
+    send({ type: 'done', finished, truncated });
   } catch (err) {
-    console.error('Ошибка агента:', err);
-    send({
-      type: 'error',
-      error:
-        err instanceof Error && err.message.includes('GEMINI_API_KEY')
-          ? err.message
-          : 'Не удалось получить ответ от модели. Попробуйте ещё раз.',
-    });
+    const created = session.variants.slice(variantsBefore).map((v) => v.n);
+    recordFailedTurn(session, userText, created);
+
+    if (isAbort(err)) {
+      logWarn('turn.aborted', ctx, { created: created.join(',') });
+    } else {
+      const info = classifyError(err);
+      logError('turn.failed', ctx, {
+        code: info.code,
+        detail: info.logDetail,
+        created: created.join(','),
+      });
+      send({
+        type: 'error',
+        error: info.message,
+        code: info.code,
+        retryable: info.retryable,
+      });
+      send({ type: 'done', finished: false });
+    }
   } finally {
+    session.busy = false;
+    res.off('close', onClose);
     res.end();
   }
 });
 
 /** Завершить диалог и удалить память сессии */
 chatRouter.delete('/:sessionId', (req: Request, res: Response) => {
-  deleteSession(req.params.sessionId as string);
+  const id = req.params.sessionId as string;
+  if (deleteSession(id)) {
+    logInfo('session.deleted', { sessionId: id }, { total: sessionCount() });
+  }
   res.status(204).end();
 });
