@@ -26,6 +26,7 @@ export class ChatComponent {
 
   private sessionId: string | null = null;
 
+  readonly open = signal(false);
   readonly phase = signal<Phase>('setup');
   readonly ldap = signal('i.ivanov');
   readonly fullName = signal('Иванов Иван Иванович');
@@ -34,6 +35,11 @@ export class ChatComponent {
   readonly busy = signal(false);
   readonly canClose = signal(false);
   readonly setupError = signal('');
+
+  togglePanel(): void {
+    this.open.update((v) => !v);
+    if (this.open()) this.scrollDown();
+  }
 
   async startSession(): Promise<void> {
     if (this.busy() || !this.ldap().trim() || !this.fullName().trim()) return;
@@ -48,6 +54,7 @@ export class ChatComponent {
         {
           role: 'assistant',
           text: `Здравствуйте, ${this.fullName().trim()}! Опишите, какой HTML-виджет вам нужен (без JavaScript), — я предложу вариант, а вы сможете уточнять его, пока не нажмёте «Принять».`,
+          time: this.now(),
         },
       ]);
       this.canClose.set(false);
@@ -85,8 +92,8 @@ export class ChatComponent {
 
     this.messages.update((list) => [
       ...list,
-      { role: 'user', text: shownUserText },
-      { role: 'assistant', text: '', streaming: true },
+      { role: 'user', text: shownUserText, time: this.now() },
+      { role: 'assistant', text: '', streaming: true, time: this.now() },
     ]);
     this.scrollDown();
 
@@ -167,6 +174,13 @@ export class ChatComponent {
       const copy = [...list];
       copy[copy.length - 1] = { ...copy[copy.length - 1], ...patch };
       return copy;
+    });
+  }
+
+  private now(): string {
+    return new Date().toLocaleTimeString('ru-RU', {
+      hour: '2-digit',
+      minute: '2-digit',
     });
   }
 

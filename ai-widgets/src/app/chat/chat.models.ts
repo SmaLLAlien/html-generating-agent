@@ -25,4 +25,6 @@ export interface ChatMessage {
   error?: boolean;
   /** Показать блок с кодом */
   showCode?: boolean;
+  /** Время отправки (ЧЧ:ММ) */
+  time?: string;
 }
