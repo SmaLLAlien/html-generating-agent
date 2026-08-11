@@ -36,15 +36,18 @@
   background: var(--pb-green-dark);
 }
 
-/* --- Окно чата (360x590, как у Привата) --- */
+/* --- Окно чата.
+   Было 360x590 по мерке приватовского помощника, но там чат текстовый.
+   Здесь в ленте живут превью виджетов и миниатюры картинок, поэтому шире
+   и выше: 540x800. max-* оставляют панель в экране на ноутбуках. --- */
 .panel {
   position: fixed;
   right: 24px;
   bottom: 96px;
   z-index: 1000;
-  width: 360px;
+  width: 540px;
   max-width: calc(100vw - 32px);
-  height: 590px;
+  height: 800px;
   max-height: calc(100dvh - 120px);
   display: flex;
   flex-direction: column;
