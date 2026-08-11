@@ -195,7 +195,12 @@ export class ChatComponent {
 
   /** Три пути добавления — кнопка, перетаскивание, вставка — один обработчик */
   async addFiles(files: File[]): Promise<void> {
-    if (!this.sessionId || this.inputBlocked()) return;
+    if (this.inputBlocked()) return;
+    if (!this.sessionId) {
+      // Молчать нельзя: пользователь вставил картинку и не понял бы, почему ничего не произошло
+      this.handleSessionGone();
+      return;
+    }
     const images = files.filter(isSupportedImage);
     if (!images.length) {
       if (files.length) {
@@ -220,12 +225,27 @@ export class ChatComponent {
         ]);
       }
     } catch (err) {
-      this.pushSystemMessage(
-        err instanceof Error ? err.message : 'Не удалось приложить картинку'
-      );
+      // Истёкшая сессия при загрузке — та же ситуация, что при отправке:
+      // нужен не сухой текст ошибки, а выход в новый диалог
+      if (err instanceof ChatHttpError && err.status === 404) {
+        this.handleSessionGone();
+      } else {
+        this.pushSystemMessage(
+          err instanceof Error ? err.message : 'Не удалось приложить картинку'
+        );
+      }
     } finally {
       this.uploading.set(false);
     }
+  }
+
+  /** Сессии на сервере больше нет: чистим локальное состояние и даём выход */
+  private handleSessionGone(): void {
+    this.sessionId = null;
+    this.sessionExpired.set(true);
+    this.pending.set([]);
+    this.pushNotice('expired');
+    this.scrollDown();
   }
 
   onFilePicked(event: Event): void {
@@ -235,7 +255,17 @@ export class ChatComponent {
     input.value = '';
   }
 
+  /**
+   * Вставка ловится на уровне документа, а не только на поле ввода: событие
+   * paste приходит сфокусированному элементу, и если пользователь щёлкнул
+   * куда-то ещё в панели, обработчик на textarea бы не сработал. Ожидание —
+   * «вставляю картинку в чат», а не «в конкретное поле».
+   *
+   * Текстовую вставку не трогаем: выходим сразу, если картинок в буфере нет.
+   */
+  @HostListener('document:paste', ['$event'])
   onPaste(event: ClipboardEvent): void {
+    if (!this.open() || this.phase() !== 'chat') return;
     const images = imagesFromTransfer(event.clipboardData);
     if (!images.length) return;
     event.preventDefault();
@@ -480,14 +510,12 @@ export class ChatComponent {
     // Сессии больше нет: раньше каждая следующая отправка повторяла ту же
     // ошибку бесконечно, потому что sessionId не сбрасывался
     if (err instanceof ChatHttpError && err.status === 404) {
-      this.sessionId = null;
-      this.sessionExpired.set(true);
       this.patchLast({
         text: '⚠️ Диалог истёк — сервер уже удалил его историю.',
         error: true,
         streaming: false,
       });
-      this.pushNotice('expired');
+      this.handleSessionGone();
       return;
     }
 
