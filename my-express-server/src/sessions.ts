@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
-import { MAX_SESSIONS, MAX_VARIANTS_PER_SESSION } from './config.js';
+import {
+  MAX_ATTACHMENTS_PER_SESSION,
+  MAX_SESSIONS,
+  MAX_VARIANTS_PER_SESSION,
+} from './config.js';
 import { DEFAULT_MODEL_ID } from './models.js';
 
 export interface UserInfo {
@@ -33,6 +37,23 @@ export interface WidgetVariant {
   createdAt: number;
 }
 
+/**
+ * Картинка, приложенная пользователем.
+ *
+ * Хранится отдельно от истории по той же причине, что и код вариантов: в
+ * контексте модели остаётся только последний набор, всё старше заменяется
+ * стабом, а полные данные достаются инструментом getAttachment.
+ */
+export interface Attachment {
+  id: string;
+  kind: 'image';
+  name: string;
+  mediaType: string;
+  data: Buffer;
+  sizeBytes: number;
+  createdAt: number;
+}
+
 export interface ChatSession {
   id: string;
   user: UserInfo;
@@ -40,6 +61,8 @@ export interface ChatSession {
   messages: ModelMessage[];
   /** Реестр всех созданных вариантов виджета */
   variants: WidgetVariant[];
+  /** Реестр приложенных картинок */
+  attachments: Attachment[];
   /** Счётчик номеров вариантов — не переиспользуется даже после отката */
   variantCounter: number;
   /** id выбранной модели из реестра models.ts */
@@ -89,6 +112,7 @@ export function createSession(user: UserInfo): ChatSession {
     user,
     messages: [],
     variants: [],
+    attachments: [],
     variantCounter: 0,
     modelId: DEFAULT_MODEL_ID,
     contextTokens: 0,
@@ -162,6 +186,32 @@ export function markAccepted(session: ChatSession, n: number): boolean {
   if (!variant) return false;
   variant.accepted = true;
   return true;
+}
+
+/** Есть ли ещё место под вложение */
+export function canAddAttachment(session: ChatSession): boolean {
+  return session.attachments.length < MAX_ATTACHMENTS_PER_SESSION;
+}
+
+export function addAttachment(
+  session: ChatSession,
+  data: { name: string; mediaType: string; data: Buffer; sizeBytes: number }
+): Attachment {
+  const attachment: Attachment = {
+    id: `att_${session.attachments.length + 1}_${randomUUID().slice(0, 6)}`,
+    kind: 'image',
+    ...data,
+    createdAt: Date.now(),
+  };
+  session.attachments.push(attachment);
+  return attachment;
+}
+
+export function getAttachment(
+  session: ChatSession,
+  id: string
+): Attachment | undefined {
+  return session.attachments.find((a) => a.id === id);
 }
 
 /** Периодическая чистка протухших сессий */

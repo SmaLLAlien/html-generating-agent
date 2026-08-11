@@ -13,7 +13,13 @@
 </button>
 
 @if (open()) {
-  <div class="panel">
+  <div
+    class="panel"
+    [class.drag-over]="dragOver()"
+    (dragover)="onDragOver($event)"
+    (dragleave)="onDragLeave()"
+    (drop)="onDrop($event)"
+  >
     <header class="panel-header">
       <div class="panel-title">
         <strong>Помощник по виджетам</strong>
@@ -215,6 +221,23 @@
                       <span class="text">{{ m.text }}</span>
                     }
 
+                    <!-- Картинки, которые приложил пользователь: показываем
+                         прямо в ленте, чтобы было видно, что именно ушло -->
+                    @if (m.attachments?.length) {
+                      <div class="msg-attachments">
+                        @for (a of m.attachments; track a.id) {
+                          <button
+                            type="button"
+                            class="thumb"
+                            (click)="openLightbox(a)"
+                            [title]="a.name + ' — открыть крупнее'"
+                          >
+                            <img [src]="a.dataUrl" [alt]="a.name" />
+                          </button>
+                        }
+                      </div>
+                    }
+
                     @if (m.buildingWidget && !m.widgetHtml) {
                       <span class="typing building">Собираю виджет…</span>
                     }
@@ -322,9 +345,48 @@
         }
       </div>
 
+      @if (pending().length || uploading()) {
+        <div class="composer-attachments">
+          @for (a of pending(); track a.id) {
+            <div class="thumb pending" [title]="a.name">
+              <img [src]="a.dataUrl" [alt]="a.name" />
+              <button
+                type="button"
+                class="thumb-remove"
+                (click)="removePending(a.id)"
+                [attr.aria-label]="'Убрать ' + a.name"
+              >
+                ✕
+              </button>
+            </div>
+          }
+          @if (uploading()) {
+            <span class="thumb-loading">Готовлю картинку…</span>
+          }
+        </div>
+      }
+
       <footer class="composer">
+        <input
+          type="file"
+          #fileInput
+          class="file-input"
+          accept="image/png,image/jpeg,image/webp"
+          multiple
+          (change)="onFilePicked($event)"
+        />
+        <button
+          class="attach-btn"
+          [disabled]="busy() || inputBlocked() || uploading()"
+          (click)="fileInput.click()"
+          aria-label="Приложить картинку"
+          title="Приложить картинку — можно также перетащить или вставить из буфера"
+        >
+          📎
+        </button>
         <textarea
           rows="1"
+          (paste)="onPaste($event)"
           [placeholder]="
             sessionExpired()
               ? 'Диалог истёк — начните новый'
@@ -350,7 +412,7 @@
         } @else {
           <button
             class="send-btn"
-            [disabled]="inputBlocked() || !input().trim()"
+            [disabled]="inputBlocked() || (!input().trim() && !pending().length)"
             (click)="send()"
             aria-label="Отправить"
           >
@@ -358,6 +420,15 @@
           </button>
         }
       </footer>
+    }
+
+    @if (lightbox(); as shot) {
+      <div class="lightbox" (click)="closeLightbox()">
+        <img [src]="shot.dataUrl" [alt]="shot.name" />
+        <button class="lightbox-close" (click)="closeLightbox()" aria-label="Закрыть">
+          ✕
+        </button>
+      </div>
     }
 
     @if (phase() === 'closed') {

@@ -5,6 +5,14 @@ export interface SendBody {
   text?: string;
   action?: 'accept' | 'revisit';
   variant?: number;
+  attachmentIds?: string[];
+}
+
+export interface UploadedAttachment {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  approxTokens: number;
 }
 
 /** Ошибка с распознанной причиной — клиент решает, предлагать ли «Повторить» */
@@ -99,6 +107,40 @@ export class ChatService {
         false
       );
     }
+  }
+
+  /**
+   * Загрузить картинку. Отдельный маршрут: у него на сервере свой, больший
+   * лимит тела, тогда как остальные остаются на строгом 1 МБ.
+   */
+  async uploadAttachment(
+    sessionId: string,
+    file: { name: string; mediaType: string; dataUrl: string }
+  ): Promise<UploadedAttachment> {
+    const resp = await this.request(
+      `${this.base}/${sessionId}/attachment`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: file.name,
+          mediaType: file.mediaType,
+          dataBase64: file.dataUrl,
+        }),
+      },
+      STREAM_TIMEOUT_MS
+    );
+    if (!resp.ok) {
+      let message = `Не удалось загрузить картинку (HTTP ${resp.status})`;
+      try {
+        const data = (await resp.json()) as { error?: string };
+        if (data.error) message = data.error;
+      } catch {
+        /* тело не JSON — оставляем общий текст */
+      }
+      throw new ChatHttpError(message, resp.status, resp.status >= 500);
+    }
+    return (await resp.json()) as UploadedAttachment;
   }
 
   /** Завершить диалог: сервер удалит историю и все варианты сессии */

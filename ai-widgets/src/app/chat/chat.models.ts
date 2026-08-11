@@ -21,7 +21,7 @@ export type ChatStreamEvent =
     }
   | {
       type: 'status';
-      stage: 'widget-start' | 'fetching-variant';
+      stage: 'widget-start' | 'fetching-variant' | 'fetching-attachment';
       variant?: number;
     }
   | {
@@ -62,15 +62,33 @@ export interface ContextInfo {
   reasoningTokens?: number;
 }
 
+/** Картинка, приложенная пользователем: и для отправки, и для показа в ленте */
+export interface ChatAttachment {
+  /** id из реестра сессии на сервере */
+  id: string;
+  name: string;
+  /** data URL — тот же, что ушёл на сервер; используется как src превью */
+  dataUrl: string;
+  sizeBytes: number;
+}
+
 /** Что нужно, чтобы повторить упавший ход, ничего не переспрашивая */
 export interface FailedTurn {
-  body: { text?: string; action?: 'accept' | 'revisit'; variant?: number };
+  body: {
+    text?: string;
+    action?: 'accept' | 'revisit';
+    variant?: number;
+    attachmentIds?: string[];
+  };
   shownText: string;
+  attachments?: ChatAttachment[];
 }
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
+  /** Картинки, которые пользователь приложил к этому сообщению */
+  attachments?: ChatAttachment[];
   widgetHtml?: string | null;
   /** Номер варианта, присвоенный сервером */
   variant?: number;

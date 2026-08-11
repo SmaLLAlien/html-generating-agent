@@ -63,6 +63,62 @@ function pinnedVariants(session: ChatSession): Set<number> {
   return pinned;
 }
 
+/**
+ * Вытеснение картинок из пользовательских сообщений.
+ *
+ * Без этого приложенная картинка оставалась бы в истории до конца сессии и
+ * переотправлялась на каждом ходу И на каждом шаге внутри хода — скриншот
+ * 1920×1080 стоит около 1500 токенов, так что рост был бы быстрым. Это ровно
+ * та же проблема, что решает вытеснение кода виджетов, только через другую дверь.
+ *
+ * Полным остаётся ТОЛЬКО последний набор картинок: над ним идёт работа. Всё
+ * старше заменяется текстовой пометкой, а сами данные лежат в реестре сессии и
+ * достаются инструментом getAttachment.
+ */
+function evictImages(session: ChatSession, stats: EvictionStats): void {
+  // Ищем последнее пользовательское сообщение с картинками — оно закреплено
+  let lastWithImages = -1;
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const message = session.messages[i]!;
+    if (message.role !== 'user' || !Array.isArray(message.content)) continue;
+    if (message.content.some((p) => p.type === 'image')) {
+      lastWithImages = i;
+      break;
+    }
+  }
+
+  // Порядок картинок в истории совпадает с порядком в реестре — по нему и
+  // восстанавливаем имя с идентификатором для пометки
+  let seen = 0;
+
+  for (let i = 0; i < session.messages.length; i++) {
+    const message = session.messages[i]!;
+    if (message.role !== 'user' || !Array.isArray(message.content)) continue;
+
+    const parts = message.content;
+    for (let j = 0; j < parts.length; j++) {
+      const part = parts[j]!;
+      if (part.type !== 'image') continue;
+
+      const info = session.attachments[seen];
+      seen++;
+      if (i === lastWithImages) continue; // закреплено
+
+      const label = info
+        ? `«${info.name}» (id ${info.id}). Посмотреть снова — инструментом getAttachment("${info.id}")`
+        : 'без идентификатора';
+      const before =
+        part.image instanceof Uint8Array ? part.image.length : String(part.image).length;
+      const stub = `${STUB_MARK} Изображение ${label} убрано из контекста.`;
+
+      parts[j] = { type: 'text', text: stub };
+      stats.evicted++;
+      // base64 в запросе примерно на треть больше исходных байт
+      stats.freedChars += Math.round(before * 1.37) - stub.length;
+    }
+  }
+}
+
 export function evictOldWidgets(session: ChatSession): EvictionStats {
   const pinned = pinnedVariants(session);
   const byToolCallId = new Map<string, WidgetVariant>();
@@ -92,6 +148,8 @@ export function evictOldWidgets(session: ChatSession): EvictionStats {
     freedChars: 0,
     pinned: [...pinned].sort((a, b) => a - b),
   };
+
+  evictImages(session, stats);
 
   for (const message of session.messages) {
     if (!Array.isArray(message.content)) continue;

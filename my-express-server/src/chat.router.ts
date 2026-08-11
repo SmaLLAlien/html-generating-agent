@@ -1,8 +1,10 @@
 import { Router, type Request, type Response } from 'express';
 import { recordFailedTurn, runAgent } from './agent.js';
+import { estimateImageTokens, parseAttachment } from './attachments.js';
 import {
   CONTEXT_BUDGET_TOKENS,
   CONTEXT_WARN_RATIO,
+  MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_MESSAGE_LENGTH,
 } from './config.js';
 import { classifyError, isAbort } from './errors.js';
@@ -10,12 +12,16 @@ import type { AgentEvent } from './events.js';
 import { logError, logInfo, logWarn } from './log.js';
 import { DEFAULT_MODEL_ID, MODELS, isKnownModel } from './models.js';
 import {
+  addAttachment,
+  canAddAttachment,
   createSession,
   deleteSession,
+  getAttachment,
   getSession,
   getVariant,
   markAccepted,
   sessionCount,
+  type Attachment,
 } from './sessions.js';
 
 export const chatRouter = Router();
@@ -82,8 +88,49 @@ chatRouter.patch('/:sessionId/model', (req: Request, res: Response) => {
 });
 
 /**
+ * Загрузить картинку. Тело: { name, mediaType, dataBase64 }.
+ * Отдельный маршрут с увеличенным лимитом тела — см. index.ts.
+ */
+chatRouter.post('/:sessionId/attachment', (req: Request, res: Response) => {
+  const session = getSession(req.params.sessionId as string);
+  if (!session) {
+    res.status(404).json({ error: 'Сессия не найдена или истекла' });
+    return;
+  }
+
+  if (!canAddAttachment(session)) {
+    res
+      .status(400)
+      .json({ error: 'В этом диалоге уже слишком много картинок' });
+    return;
+  }
+
+  const parsed = parseAttachment(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+
+  const attachment = addAttachment(session, parsed.value);
+  logInfo('attachment.added', { sessionId: session.id, ldap: session.user.ldap }, {
+    id: attachment.id,
+    mediaType: attachment.mediaType,
+    sizeBytes: attachment.sizeBytes,
+    approxTokens: estimateImageTokens(attachment.sizeBytes),
+    total: session.attachments.length,
+  });
+
+  res.status(201).json({
+    id: attachment.id,
+    name: attachment.name,
+    sizeBytes: attachment.sizeBytes,
+    approxTokens: estimateImageTokens(attachment.sizeBytes),
+  });
+});
+
+/**
  * Отправить сообщение агенту.
- * Тело: { text } | { action: 'accept', variant } | { action: 'revisit', variant, text }
+ * Тело: { text, attachmentIds? } | { action: 'accept', variant } | { action: 'revisit', variant, text }
  *
  * Ответ — SSE-поток событий (см. AgentEvent в events.ts):
  *   text / widget / status / usage / limit / done / error
@@ -97,10 +144,11 @@ chatRouter.post('/:sessionId/message', async (req: Request, res: Response) => {
 
   const ctx = { sessionId: session.id, ldap: session.user.ldap };
 
-  const { text, action, variant } = (req.body ?? {}) as {
+  const { text, action, variant, attachmentIds } = (req.body ?? {}) as {
     text?: unknown;
     action?: unknown;
     variant?: unknown;
+    attachmentIds?: unknown;
   };
 
   const variantNumber =
@@ -109,6 +157,15 @@ chatRouter.post('/:sessionId/message', async (req: Request, res: Response) => {
       : null;
   const userComment =
     typeof text === 'string' ? text.trim().slice(0, MAX_MESSAGE_LENGTH) : '';
+
+  // Берём только те id, что реально есть в реестре: клиент мог прислать чужие
+  const attached = Array.isArray(attachmentIds)
+    ? attachmentIds
+        .filter((id): id is string => typeof id === 'string')
+        .slice(0, MAX_ATTACHMENTS_PER_MESSAGE)
+        .map((id) => getAttachment(session, id))
+        .filter((a): a is Attachment => a != null)
+    : [];
 
   // Приняли вариант — но пометку ставим только если он существует,
   // иначе агенту уходило сообщение про несуществующий номер
@@ -135,8 +192,12 @@ chatRouter.post('/:sessionId/message', async (req: Request, res: Response) => {
       (userComment ? `\n\nЧто просит пользователь: ${userComment}` : '');
   } else if (userComment) {
     userText = userComment;
+  } else if (attached.length) {
+    // Картинку можно прислать и без подписи — тогда текст подставляем сами,
+    // иначе модель получила бы сообщение вообще без текстовой части
+    userText = 'Вот изображение. Сделай виджет по нему.';
   } else {
-    res.status(400).json({ error: 'Нужно поле text либо action' });
+    res.status(400).json({ error: 'Нужно поле text, action или вложение' });
     return;
   }
 
@@ -186,7 +247,8 @@ chatRouter.post('/:sessionId/message', async (req: Request, res: Response) => {
       session,
       userText,
       send,
-      abort.signal
+      abort.signal,
+      attached
     );
     if (acceptedVariant != null) markAccepted(session, acceptedVariant);
     send({ type: 'done', finished, truncated });

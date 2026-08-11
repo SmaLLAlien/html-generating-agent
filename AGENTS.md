@@ -56,7 +56,8 @@ cd my-express-server; $env:CONTEXT_BUDGET_TOKENS='2500'; npm run dev
 |---|---|
 | `src/agent.ts` | Ядро: `streamText`, цикл шагов, системный промпт, эфемерный блок состояния, учёт токенов |
 | `src/tools.ts` | Три инструмента агента, `validateWidget`, `stripJavaScript` |
-| `src/memory.ts` | `evictOldWidgets` — вытеснение кода виджетов из истории |
+| `src/memory.ts` | `evictOldWidgets` — вытеснение кода виджетов и картинок из истории |
+| `src/attachments.ts` | проверка картинок: тип, размер, сверка сигнатуры файла с заявленным типом |
 | `src/sessions.ts` | `Map` сессий, реестр вариантов, TTL |
 | `src/models.ts` | Реестр моделей, резолв провайдера, настройки вызова по поколениям (`callSettingsFor`) |
 | `src/brand.ts` | Фирменный стиль, вставляется в системный промпт |

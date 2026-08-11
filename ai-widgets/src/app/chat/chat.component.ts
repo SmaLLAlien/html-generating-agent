@@ -9,7 +9,9 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { imagesFromTransfer, isSupportedImage, prepareImage } from './attachments';
 import {
+  ChatAttachment,
   ChatMessage,
   ContextInfo,
   FailedTurn,
@@ -67,6 +69,14 @@ export class ChatComponent {
   /** Двухшаговое подтверждение необратимых действий */
   readonly pendingConfirm = signal<'new' | 'end' | null>(null);
   readonly copiedIndex = signal<number | null>(null);
+
+  /** Картинки, выбранные и уже загруженные на сервер, но ещё не отправленные */
+  readonly pending = signal<ChatAttachment[]>([]);
+  readonly uploading = signal(false);
+  /** Курсор над панелью с файлом — подсвечиваем зону */
+  readonly dragOver = signal(false);
+  /** Картинка, открытая на весь экран по клику в ленте */
+  readonly lightbox = signal<ChatAttachment | null>(null);
 
   /** Порог предупреждения приходит с сервера; сигнал, иначе computed не пересчитается */
   private readonly warnRatio = signal(0.8);
@@ -160,6 +170,8 @@ export class ChatComponent {
     this.warnShown = false;
     this.stuckToBottom.set(true);
     this.hasNewBelow.set(false);
+    this.pending.set([]);
+    this.lightbox.set(null);
     this.safeHtmlCache.clear();
   }
 
@@ -179,11 +191,98 @@ export class ChatComponent {
     }
   }
 
+  // ——— Вложения ———
+
+  /** Три пути добавления — кнопка, перетаскивание, вставка — один обработчик */
+  async addFiles(files: File[]): Promise<void> {
+    if (!this.sessionId || this.inputBlocked()) return;
+    const images = files.filter(isSupportedImage);
+    if (!images.length) {
+      if (files.length) {
+        this.pushSystemMessage('Можно приложить только PNG, JPEG или WebP.');
+      }
+      return;
+    }
+
+    this.uploading.set(true);
+    try {
+      for (const file of images) {
+        const prepared = await prepareImage(file);
+        const uploaded = await this.chat.uploadAttachment(this.sessionId, prepared);
+        this.pending.update((list) => [
+          ...list,
+          {
+            id: uploaded.id,
+            name: uploaded.name,
+            dataUrl: prepared.dataUrl,
+            sizeBytes: uploaded.sizeBytes,
+          },
+        ]);
+      }
+    } catch (err) {
+      this.pushSystemMessage(
+        err instanceof Error ? err.message : 'Не удалось приложить картинку'
+      );
+    } finally {
+      this.uploading.set(false);
+    }
+  }
+
+  onFilePicked(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    void this.addFiles(Array.from(input.files ?? []));
+    // Сброс, иначе повторный выбор того же файла не вызовет change
+    input.value = '';
+  }
+
+  onPaste(event: ClipboardEvent): void {
+    const images = imagesFromTransfer(event.clipboardData);
+    if (!images.length) return;
+    event.preventDefault();
+    void this.addFiles(images);
+  }
+
+  onDragOver(event: DragEvent): void {
+    if (!event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    this.dragOver.set(true);
+  }
+
+  onDragLeave(): void {
+    this.dragOver.set(false);
+  }
+
+  onDrop(event: DragEvent): void {
+    const images = imagesFromTransfer(event.dataTransfer);
+    event.preventDefault();
+    this.dragOver.set(false);
+    if (images.length) void this.addFiles(images);
+  }
+
+  removePending(id: string): void {
+    this.pending.update((list) => list.filter((a) => a.id !== id));
+  }
+
+  openLightbox(attachment: ChatAttachment): void {
+    this.lightbox.set(attachment);
+  }
+
+  closeLightbox(): void {
+    this.lightbox.set(null);
+  }
+
   async send(): Promise<void> {
     const text = this.input().trim();
-    if (!text || this.inputBlocked()) return;
+    const attachments = this.pending();
+    // Картинку можно отправить и без подписи
+    if ((!text && !attachments.length) || this.inputBlocked()) return;
     this.input.set('');
-    await this.exchange({ text }, text);
+    this.pending.set([]);
+    await this.exchange(
+      { text: text || undefined, attachmentIds: attachments.map((a) => a.id) },
+      text || 'Вот изображение — сделай виджет по нему.',
+      attachments
+    );
   }
 
   async accept(index: number): Promise<void> {
@@ -227,7 +326,8 @@ export class ChatComponent {
     const turn = this.failedTurn();
     if (!turn || this.busy() || this.inputBlocked()) return;
     this.failedTurn.set(null);
-    await this.exchange(turn.body, turn.shownText);
+    // Картинки уже лежат в реестре сессии — повтор идёт по тем же id
+    await this.exchange(turn.body, turn.shownText, turn.attachments ?? []);
   }
 
   /** Прервать генерацию. Сервер увидит закрытие соединения и остановит модель */
@@ -237,7 +337,8 @@ export class ChatComponent {
 
   private async exchange(
     body: SendBody,
-    shownUserText: string
+    shownUserText: string,
+    attachments: ChatAttachment[] = []
   ): Promise<boolean> {
     if (this.busy() || !this.sessionId) return false;
     this.busy.set(true);
@@ -245,7 +346,12 @@ export class ChatComponent {
 
     this.messages.update((list) => [
       ...list,
-      { role: 'user', text: shownUserText, time: this.now() },
+      {
+        role: 'user',
+        text: shownUserText,
+        attachments: attachments.length ? attachments : undefined,
+        time: this.now(),
+      },
       { role: 'assistant', text: '', streaming: true, time: this.now() },
     ]);
     this.scrollDown();
@@ -302,7 +408,13 @@ export class ChatComponent {
 
             case 'error':
               ok = false;
-              this.showStreamError(event.error, event.retryable, body, shownUserText);
+              this.showStreamError(
+                event.error,
+                event.retryable,
+                body,
+                shownUserText,
+                attachments
+              );
               break;
           }
           this.scrollDown();
@@ -311,7 +423,7 @@ export class ChatComponent {
       );
     } catch (err) {
       ok = false;
-      this.handleTurnFailure(err, body, shownUserText);
+      this.handleTurnFailure(err, body, shownUserText, attachments);
     } finally {
       this.abortCtrl = null;
       this.patchLast({ streaming: false, buildingWidget: false });
@@ -330,7 +442,8 @@ export class ChatComponent {
     text: string,
     retryable: boolean,
     body: SendBody,
-    shownText: string
+    shownText: string,
+    attachments: ChatAttachment[] = []
   ): void {
     const last = this.messages().at(-1);
     const prefix = last?.text ? `${last.text}\n\n` : '';
@@ -341,13 +454,14 @@ export class ChatComponent {
       streaming: false,
       buildingWidget: false,
     });
-    if (retryable) this.failedTurn.set({ body, shownText });
+    if (retryable) this.failedTurn.set({ body, shownText, attachments });
   }
 
   private handleTurnFailure(
     err: unknown,
     body: SendBody,
-    shownText: string
+    shownText: string,
+    attachments: ChatAttachment[] = []
   ): void {
     // Прерывание пользователем — не ошибка, помечаем как остановленный ход
     if (err instanceof DOMException && err.name === 'AbortError') {
@@ -359,7 +473,7 @@ export class ChatComponent {
         streaming: false,
         buildingWidget: false,
       });
-      this.failedTurn.set({ body, shownText });
+      this.failedTurn.set({ body, shownText, attachments });
       return;
     }
 
@@ -393,7 +507,7 @@ export class ChatComponent {
       streaming: false,
       buildingWidget: false,
     });
-    if (retryable) this.failedTurn.set({ body, shownText });
+    if (retryable) this.failedTurn.set({ body, shownText, attachments });
   }
 
   private attachWidget(event: {

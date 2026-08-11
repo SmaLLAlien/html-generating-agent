@@ -33,7 +33,7 @@ export type AgentEvent =
   /** Индикация долгой операции, чтобы пауза не выглядела зависанием */
   | {
       type: 'status';
-      stage: 'widget-start' | 'fetching-variant';
+      stage: 'widget-start' | 'fetching-variant' | 'fetching-attachment';
       variant?: number;
     }
   /** Расход контекста после хода */

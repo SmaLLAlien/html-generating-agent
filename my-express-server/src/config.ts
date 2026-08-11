@@ -41,3 +41,26 @@ export const MAX_VARIANTS_PER_SESSION = readInt('MAX_VARIANTS_PER_SESSION', 50);
 
 /** Ограничение длины сообщения пользователя, символов */
 export const MAX_MESSAGE_LENGTH = readInt('MAX_MESSAGE_LENGTH', 8_000);
+
+/**
+ * Размер одной картинки после ужатия на клиенте, байт. Клиент приводит длинную
+ * сторону к 1024px и перекодирует в JPEG, поэтому 4 МБ — щедрый запас; лимит
+ * тут стоит на случай, если ужатие обошли.
+ */
+export const MAX_ATTACHMENT_BYTES = readInt('MAX_ATTACHMENT_BYTES', 4 * 1024 * 1024);
+
+/** Сколько картинок можно приложить к одному сообщению */
+export const MAX_ATTACHMENTS_PER_MESSAGE = readInt('MAX_ATTACHMENTS_PER_MESSAGE', 4);
+
+/**
+ * Потолок вложений на сессию. Как и варианты, они живут до конца диалога:
+ * вытеснение убирает их из контекста модели, но не из реестра.
+ */
+export const MAX_ATTACHMENTS_PER_SESSION = readInt('MAX_ATTACHMENTS_PER_SESSION', 20);
+
+/**
+ * Лимит тела для маршрута загрузки. Стоит отдельно от общего 1 МБ: поднимать
+ * общий нельзя — сессии не аутентифицированы, и большой парсер на всех
+ * маршрутах это новая поверхность для отказа в обслуживании.
+ */
+export const ATTACHMENT_BODY_LIMIT = process.env.ATTACHMENT_BODY_LIMIT ?? '8mb';

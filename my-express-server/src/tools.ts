@@ -4,6 +4,7 @@ import type { EmitEvent } from './events.js';
 import {
   addVariant,
   canAddVariant,
+  getAttachment,
   getVariant,
   type ChatSession,
 } from './sessions.js';
@@ -170,6 +171,50 @@ export function buildTools(session: ChatSession, emit: EmitEvent): ToolSet {
           ? {
               type: 'text',
               value: `Полный код варианта #${result.n} «${result.title}»:\n${result.html}`,
+            }
+          : { type: 'error-text', value: result.error },
+    }),
+
+    getAttachment: tool({
+      description:
+        'Посмотреть заново картинку, которую присылал пользователь, по её id. ' +
+        'Нужен, когда картинка из старого сообщения уже вытеснена из контекста.',
+      inputSchema: z.object({
+        id: z.string().describe('Идентификатор картинки, например att_1_a3f9c2'),
+      }),
+      execute: async ({ id }) => {
+        emit({ type: 'status', stage: 'fetching-attachment' });
+        const found = getAttachment(session, id);
+        if (!found) {
+          const known = session.attachments.map((a) => a.id).join(', ');
+          return {
+            ok: false as const,
+            error: `Картинки с id ${id} нет. Доступны: ${known || 'ни одной'}.`,
+          };
+        }
+        return {
+          ok: true as const,
+          name: found.name,
+          mediaType: found.mediaType,
+          base64: found.data.toString('base64'),
+        };
+      },
+      /**
+       * Результат инструмента может нести медиа, а не только текст — этим и
+       * возвращаем картинку обратно в контекст модели.
+       */
+      toModelOutput: (result) =>
+        result.ok
+          ? {
+              type: 'content',
+              value: [
+                { type: 'text', text: `Изображение «${result.name}»:` },
+                {
+                  type: 'media',
+                  data: result.base64,
+                  mediaType: result.mediaType,
+                },
+              ],
             }
           : { type: 'error-text', value: result.error },
     }),

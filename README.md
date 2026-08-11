@@ -45,6 +45,10 @@ cd ai-widgets && npm install && npm start
 | `MAX_SESSIONS` | `500` | Потолок сессий в памяти; при переполнении вытесняется самая давняя |
 | `MAX_VARIANTS_PER_SESSION` | `50` | Потолок вариантов в одном диалоге |
 | `MAX_MESSAGE_LENGTH` | `8000` | Длина сообщения пользователя, символов (лишнее обрезается) |
+| `MAX_ATTACHMENT_BYTES` | `4194304` | Потолок одной картинки после ужатия на клиенте |
+| `MAX_ATTACHMENTS_PER_MESSAGE` | `4` | Сколько картинок можно приложить к одному сообщению |
+| `MAX_ATTACHMENTS_PER_SESSION` | `20` | Потолок картинок на диалог |
+| `ATTACHMENT_BODY_LIMIT` | `8mb` | Лимит тела для маршрута загрузки; на остальных остаётся 1 МБ |
 | `PORT` | `3000` | Порт сервера. При смене поправьте `ai-widgets/proxy.conf.json` |
 
 Менять значения на лету нельзя — `dotenv` читает файл только при запуске, а `tsx watch`
@@ -92,13 +96,23 @@ cd ai-widgets && npm install && npm start
 Запрос: `{ "modelId": "gemini-2.5-pro" }`. Ответ `200`: `{ "modelId": "gemini-2.5-pro" }`.
 История и варианты сессии сохраняются. Ошибки: `404` — сессии нет, `400` — модель неизвестна.
 
+### `POST /:sessionId/attachment`
+
+Загрузка картинки. Отдельный маршрут: у него увеличенный лимит тела, остальные
+остаются на строгом 1 МБ.
+
+Запрос: `{ "name": "shot.png", "mediaType": "image/png", "dataBase64": "..." }`.
+Принимаются только PNG, JPEG и WebP; сигнатура файла сверяется с заявленным типом.
+Ответ `201`: `{ "id": "att_1_a3f9c2", "name", "sizeBytes", "approxTokens" }`.
+
 ### `POST /:sessionId/message`
 
-Тело — одна из трёх форм:
+Тело — одна из форм:
 
 | Форма | Смысл |
 |---|---|
 | `{ "text": "..." }` | Обычное сообщение |
+| `{ "text": "...", "attachmentIds": ["att_1_a3f9c2"] }` | Сообщение с картинками; `text` можно опустить |
 | `{ "action": "accept", "variant": 3 }` | Нажата «Принять» под вариантом #3 |
 | `{ "action": "revisit", "variant": 1, "text": "..." }` | Взять вариант #1 за основу; `text` — необязательный комментарий |
 
@@ -118,7 +132,7 @@ cd ai-widgets && npm install && npm start
 |---|---|---|
 | `text` | `delta` | Приращение текста. **Не** накопленный текст — клиент склеивает сам |
 | `widget` | `variant`, `title`, `basedOn`, `html` | Агент выдал новую версию виджета |
-| `status` | `stage`, `variant?` | `widget-start` — начал собирать виджет; `fetching-variant` — тянет старый вариант |
+| `status` | `stage`, `variant?` | `widget-start` — начал собирать виджет; `fetching-variant` — тянет старый вариант; `fetching-attachment` — смотрит картинку заново |
 | `usage` | `contextTokens`, `budget`, `percent`, `cachedTokens?`, `reasoningTokens?` | Один раз в конце хода |
 | `limit` | `contextTokens`, `budget` | Бюджет исчерпан, модель не вызывалась |
 | `done` | `finished`, `truncated?` | Ход завершён; `finished: true` — агент закрыл диалог; `truncated: true` — ответ обрезан по лимиту длины |

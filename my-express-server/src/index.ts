@@ -1,12 +1,25 @@
 import 'dotenv/config';
 import express, { NextFunction, Request, Response } from 'express';
 import { chatRouter } from './chat.router.js';
+import { ATTACHMENT_BODY_LIMIT } from './config.js';
 import { logError, logInfo, logWarn } from './log.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3000);
 
-app.use(express.json({ limit: '1mb' }));
+/**
+ * Парсер тела выбирается по маршруту. Общий лимит поднимать нельзя: сессии не
+ * аутентифицированы, и большой парсер на всех маршрутах — новая поверхность
+ * для отказа в обслуживании. Картинки принимает только один маршрут.
+ */
+const jsonParser = express.json({ limit: '1mb' });
+const uploadParser = express.json({ limit: ATTACHMENT_BODY_LIMIT });
+
+app.use((req: Request, res: Response, next: NextFunction) =>
+  req.path.endsWith('/attachment')
+    ? uploadParser(req, res, next)
+    : jsonParser(req, res, next)
+);
 
 app.get('/', (_req: Request, res: Response) => {
   res.send('TypeScript Express сервер працює!');

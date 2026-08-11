@@ -1,4 +1,10 @@
-import { hasToolCall, stepCountIs, streamText, type ModelMessage } from 'ai';
+import {
+  hasToolCall,
+  stepCountIs,
+  streamText,
+  type ModelMessage,
+  type UserContent,
+} from 'ai';
 import { BRAND_GUIDE } from './brand.js';
 import {
   CONTEXT_BUDGET_TOKENS,
@@ -10,7 +16,7 @@ import type { EmitEvent } from './events.js';
 import { logError, logInfo, logWarn } from './log.js';
 import { evictOldWidgets } from './memory.js';
 import { callSettingsFor, resolveModel } from './models.js';
-import type { ChatSession, UserInfo } from './sessions.js';
+import type { Attachment, ChatSession, UserInfo } from './sessions.js';
 import { buildTools } from './tools.js';
 
 export { stripJavaScript } from './tools.js';
@@ -25,6 +31,7 @@ function buildSystemPrompt(user: UserInfo): string {
 ИНСТРУМЕНТЫ:
 - emitWidget — ЕДИНСТВЕННЫЙ способ показать виджет пользователю. Вызывай его каждый раз, когда создаёшь или изменяешь виджет.
 - getVariant — получить полный код ранее созданного варианта по номеру.
+- getAttachment — посмотреть заново картинку, которую прислал пользователь, по её id.
 - finishDialog — завершить диалог после явного одобрения виджета.
 
 ЖЁСТКИЕ ПРАВИЛА ДЛЯ ВИДЖЕТОВ:
@@ -34,6 +41,7 @@ function buildSystemPrompt(user: UserInfo): string {
 4. НИКОГДА не пиши HTML-код виджета в тексте ответа — ни целиком, ни кусками, ни в блоке кода. Пользователь видит виджет из emitWidget. В тексте — только описание, вопросы и пояснения.
 5. Если ты дорабатываешь существующий вариант — укажи его номер в basedOn.
 6. Код старых вариантов в истории заменён пометкой и тебе не виден. Если он нужен — вызови getVariant с номером. Номера вариантов не переиспользуются: доработка варианта #1 создаёт новый вариант со следующим свободным номером.
+7. Если пользователь прислал картинку — разбери, что на ней: раскладку, цвета, отступы, шрифты, содержимое блоков. Повтори увиденное в виджете, а не пересказывай картинку словами. Из старых сообщений картинки тоже вытесняются: если нужно взглянуть ещё раз, вызови getAttachment с её id.
 
 ${BRAND_GUIDE}
 
@@ -97,6 +105,34 @@ function stateMessages(session: ChatSession): ModelMessage[] {
   ];
 }
 
+/**
+ * Сообщение пользователя с картинками.
+ *
+ * Провайдер превращает `image` в `inlineData: { mimeType, data: base64 }` и
+ * никаких проверок размера не делает — потолки стоят у нас, в attachments.ts.
+ * Имя файла передаём текстом: у части `image` нет поля под него, а модели
+ * полезно на что-то ссылаться в ответе.
+ */
+function buildUserContent(
+  userText: string,
+  attachments: Attachment[]
+): UserContent {
+  if (!attachments.length) return userText;
+
+  const list = attachments
+    .map((a) => `«${a.name}» (id ${a.id})`)
+    .join(', ');
+
+  return [
+    { type: 'text', text: `${userText}\n\n[Приложены изображения: ${list}]` },
+    ...attachments.map((a) => ({
+      type: 'image' as const,
+      image: a.data,
+      mediaType: a.mediaType,
+    })),
+  ];
+}
+
 export interface AgentTurnResult {
   /** Агент вызвал finishDialog */
   finished: boolean;
@@ -117,9 +153,13 @@ export async function runAgent(
   session: ChatSession,
   userText: string,
   emit: EmitEvent,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  attachments: Attachment[] = []
 ): Promise<AgentTurnResult> {
-  const userMessage: ModelMessage = { role: 'user', content: userText };
+  const userMessage: ModelMessage = {
+    role: 'user',
+    content: buildUserContent(userText, attachments),
+  };
   const ctx = {
     sessionId: session.id,
     ldap: session.user.ldap,
