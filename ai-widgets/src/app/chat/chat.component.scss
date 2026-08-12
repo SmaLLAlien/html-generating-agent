@@ -1,0 +1,905 @@
+/* Точные значения сняты с чата помощника на privatbank.ua (06.08.2026):
+   зелёный #4EA524, фон ленты #F5F5F5, пузыри 8px со «хвостиком» 2px,
+   шрифт PryvatSans/Open Sans, тени кнопок/шапки/футера, лаунчер 60px.
+
+   Разметка по БЭМ, стили — вложенностью через `&__` и `&--`.
+   Плата за такую запись: полное имя класса вроде `chat__header` в исходнике
+   не найти поиском, оно собирается из `&`. Взамен блок виден целиком одним
+   куском, а специфичность остаётся плоской — селекторы вида
+   `.chat .chat__header` не появляются. */
+
+// Цвета в кастомных свойствах, а не в переменных Sass: они живут в рантайме,
+// переопределяются каскадом и доступны вложенным виджетам.
+:host {
+  --pb-green: #4ea524;
+  --pb-green-dark: #438f1f;
+  --pb-bg: #f5f5f5;
+  --pb-text: rgba(0, 0, 0, 0.87);
+  --pb-muted: rgba(0, 0, 0, 0.54);
+  --pb-danger: #c5221f;
+  --pb-btn-shadow: rgba(0, 0, 0, 0.12) 0px 2px 4px 0px,
+    rgba(0, 0, 0, 0.12) 0px 0px 4px 0px;
+
+  font-family: 'PryvatSans', 'Open Sans', 'Segoe UI', Arial, sans-serif;
+}
+
+$focus-ring: 2px solid var(--pb-green-dark);
+
+/* ==========================================================================
+   Кнопка-лаунчер (60px, как у Привата)
+   ========================================================================== */
+.chat-launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1001;
+  width: 60px;
+  height: 60px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--pb-green);
+  color: #fff;
+  font-size: 1.45rem;
+  cursor: pointer;
+  box-shadow:
+    rgba(0, 0, 0, 0.1) 0px 5px 15px 0px,
+    rgba(0, 0, 0, 0.15) 0px 3px 5px 0px;
+  transition:
+    transform 0.15s,
+    background 0.15s;
+
+  &:hover {
+    transform: scale(1.05);
+    background: var(--pb-green-dark);
+  }
+
+  &:focus-visible {
+    outline: $focus-ring;
+    outline-offset: 2px;
+  }
+}
+
+/* ==========================================================================
+   Окно чата.
+   Было 360x590 по мерке приватовского помощника, но там чат текстовый.
+   Здесь в ленте живут превью виджетов и миниатюры картинок, поэтому шире
+   и выше: 540x800. max-* оставляют панель в экране на ноутбуках.
+   ========================================================================== */
+.chat {
+  position: fixed;
+  right: 24px;
+  bottom: 96px;
+  z-index: 1000;
+  width: 540px;
+  max-width: calc(100vw - 32px);
+  height: 800px;
+  max-height: calc(100dvh - 120px);
+  display: flex;
+  flex-direction: column;
+  background: var(--pb-bg);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  animation: chat-in 0.18s ease-out;
+  color: var(--pb-text);
+  font-family: inherit;
+
+  &--drag-over {
+    outline: 2px dashed var(--pb-green);
+    outline-offset: -6px;
+  }
+
+  &__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 16px;
+    background: var(--pb-green);
+    color: #fff;
+    box-shadow: rgba(0, 0, 0, 0.2) 0px 1px 4px 0px;
+    z-index: 1;
+  }
+
+  &__titles {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  &__title {
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 24px;
+  }
+
+  &__subtitle {
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 21px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  // Полоса под шапкой: выбор модели и расход контекста
+  &__toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 16px;
+    background: #fff;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    font-size: 12px;
+  }
+
+  // Стартовый и финальный экраны
+  &__body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    background: var(--pb-bg);
+  }
+
+  &__banner {
+    padding: 8px 16px;
+    background: #eef7e6;
+    color: #3d7d1c;
+    font-size: 13px;
+  }
+}
+
+@keyframes chat-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ==========================================================================
+   Стартовый экран: LDAP и ФИО
+   ========================================================================== */
+.setup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  &__title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 500;
+  }
+
+  &__hint {
+    margin: 0;
+    color: var(--pb-muted);
+    font-size: 13px;
+  }
+
+  &__field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 13px;
+    color: var(--pb-muted);
+  }
+
+  &__input {
+    padding: 10px 12px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 8px;
+    font-size: 15px;
+    font-family: inherit;
+    background: #fff;
+
+    &:focus {
+      outline: none;
+      border-color: var(--pb-green);
+    }
+
+    &:focus-visible {
+      outline: $focus-ring;
+      outline-offset: 2px;
+    }
+  }
+
+  &__error {
+    margin: 0;
+    color: var(--pb-danger);
+    font-size: 13px;
+  }
+}
+
+/* ==========================================================================
+   Лента сообщений
+   ========================================================================== */
+.feed {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+
+  &__list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px 16px;
+    display: flex;
+    flex-direction: column;
+    background: var(--pb-bg);
+  }
+
+  // Появляется, когда пользователь отлистал вверх и пришли новые сообщения
+  &__jump {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    padding: 6px 14px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--pb-green);
+    color: #fff;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+  }
+}
+
+// У Привата это просто серый текст по центру, без плашки
+.day-chip {
+  align-self: center;
+  margin: 8px auto 4px;
+  color: var(--pb-muted);
+  font-size: 12px;
+  width: fit-content;
+}
+
+/* ==========================================================================
+   Сообщение
+   ========================================================================== */
+.message {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+
+  &__meta {
+    margin: 6px 0 4px 40px;
+    font-size: 12px;
+    color: var(--pb-muted);
+  }
+
+  &__row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  &__avatar {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--pb-green);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__bubble {
+    position: relative;
+    max-width: 82%;
+    padding: 10px 12px 16px;
+    border-radius: 8px 8px 8px 2px; // «хвостик» к аватару, как у Привата
+    background: #fff;
+    font-size: 15px;
+    line-height: 1.45;
+    color: var(--pb-text);
+  }
+
+  &__text {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  &__typing {
+    color: var(--pb-muted);
+    font-style: italic;
+
+    &--block {
+      display: block;
+      margin-top: 6px;
+    }
+  }
+
+  &__hint {
+    display: block;
+    margin-top: 6px;
+    color: var(--pb-muted);
+    font-size: 12px;
+  }
+
+  &__time {
+    position: absolute;
+    right: 8px;
+    bottom: 3px;
+    font-size: 10px;
+    color: var(--pb-muted);
+  }
+
+  &__attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  &--user {
+    .message__row {
+      justify-content: flex-end;
+    }
+
+    .message__bubble {
+      background: #e7f4dd;
+      border-radius: 8px 8px 2px 8px;
+    }
+  }
+
+  &--error .message__bubble {
+    background: #fdecea;
+    color: var(--pb-danger);
+  }
+}
+
+/* ==========================================================================
+   Блок виджета
+   ========================================================================== */
+.widget {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  &__preview {
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 8px;
+    overflow: hidden;
+
+    // 200px — замочная скважина для виджета под нормальный экран
+    &--expanded .widget__frame {
+      height: 70vh;
+      max-height: 620px;
+    }
+  }
+
+  &__frame {
+    display: block;
+    width: 100%;
+    height: 200px;
+    border: 0;
+    background: #fff;
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__code {
+    margin: 0;
+    padding: 10px;
+    background: #2d2d2d;
+    color: #eee;
+    border-radius: 8px;
+    font-size: 11px;
+    max-height: 200px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+}
+
+/* ==========================================================================
+   Номер варианта под превью
+   ========================================================================== */
+.variant {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--pb-muted);
+
+  &__num {
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #eef7e6;
+    color: #3d7d1c;
+    font-weight: 600;
+  }
+
+  &__title {
+    color: var(--pb-text);
+  }
+
+  &__parent::before {
+    content: '· ';
+  }
+}
+
+/* ==========================================================================
+   Служебные плашки в ленте
+   ========================================================================== */
+.notice {
+  align-self: stretch;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff6e5;
+  border: 1px solid #f0d9a8;
+  color: #7a5410;
+  font-size: 12.5px;
+  line-height: 1.45;
+
+  &--limit,
+  &--expired {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  &--limit {
+    background: #fdecea;
+    border-color: #f3bcb8;
+    color: #8c1d18;
+  }
+
+  &--expired {
+    background: #eef1f5;
+    border-color: #c9d2dd;
+    color: #33475e;
+  }
+}
+
+/* ==========================================================================
+   Индикатор контекста
+   ========================================================================== */
+.meter {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  --meter-color: var(--pb-green);
+
+  &--warn {
+    --meter-color: #e8a33d;
+  }
+
+  &--danger {
+    --meter-color: var(--pb-danger);
+  }
+
+  &--warn &__label,
+  &--danger &__label {
+    color: var(--meter-color);
+    font-weight: 600;
+  }
+
+  &__label {
+    color: var(--pb-muted);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__bar {
+    display: block;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+  }
+
+  &__fill {
+    display: block;
+    height: 100%;
+    background: var(--meter-color);
+    transition: width 0.3s ease-out;
+  }
+}
+
+.model-select {
+  flex-shrink: 0;
+  max-width: 45%;
+  padding: 3px 6px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--pb-text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  &:focus-visible {
+    outline: $focus-ring;
+    outline-offset: 2px;
+  }
+}
+
+/* ==========================================================================
+   Вложения
+   ========================================================================== */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+
+  // Полоса над композером: то, что выбрано, но ещё не отправлено
+  &--pending {
+    padding: 8px 12px 0;
+    align-items: center;
+  }
+
+  &__status {
+    color: var(--pb-muted);
+    font-size: 12px;
+  }
+}
+
+.thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+  cursor: pointer;
+
+  &__image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  &__remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  &:focus-visible {
+    outline: $focus-ring;
+    outline-offset: 2px;
+  }
+}
+
+// Просмотр картинки крупнее: миниатюры 72px мало, чтобы что-то разобрать
+.lightbox {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.75);
+  cursor: zoom-out;
+
+  &__image {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 8px;
+  }
+
+  &__close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.9);
+    font-size: 14px;
+    cursor: pointer;
+  }
+}
+
+/* ==========================================================================
+   Поле ввода: белый футер с волосяной тенью сверху
+   ========================================================================== */
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #fff;
+  box-shadow:
+    rgba(0, 0, 0, 0.13) 0px -0.5px 0px 0px,
+    rgba(0, 0, 0, 0.02) 0px -3px 5px 0px;
+
+  &__file {
+    display: none;
+  }
+
+  &__attach {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    font-size: 17px;
+    cursor: pointer;
+    opacity: 0.75;
+
+    &:hover:not(:disabled) {
+      background: rgba(0, 0, 0, 0.06);
+      opacity: 1;
+    }
+
+    &:disabled {
+      opacity: 0.3;
+      cursor: default;
+    }
+
+    &:focus-visible {
+      outline: $focus-ring;
+      outline-offset: 2px;
+    }
+  }
+
+  &__field {
+    flex: 1;
+    resize: none;
+    padding: 8px 4px;
+    border: 0;
+    background: transparent;
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--pb-text);
+
+    &:focus {
+      outline: none;
+    }
+
+    &::placeholder {
+      color: var(--pb-muted);
+    }
+
+    &:focus-visible {
+      outline: $focus-ring;
+      outline-offset: 2px;
+    }
+  }
+
+  &__send {
+    flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--pb-green);
+    color: #fff;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      opacity 0.15s;
+
+    &:hover:not(:disabled) {
+      background: var(--pb-green-dark);
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    &:focus-visible {
+      outline: $focus-ring;
+      outline-offset: 2px;
+    }
+
+    &--stop {
+      background: var(--pb-danger);
+
+      &:hover:not(:disabled) {
+        background: var(--pb-danger);
+      }
+    }
+  }
+}
+
+/* ==========================================================================
+   Кнопки: радиус 8, тень и вес шрифта как у Привата
+   ========================================================================== */
+.btn {
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--pb-text);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: var(--pb-btn-shadow);
+  transition:
+    background 0.15s,
+    opacity 0.15s;
+
+  &:hover:not(:disabled) {
+    background: #f1f3f4;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  &:focus-visible {
+    outline: $focus-ring;
+    outline-offset: 2px;
+  }
+
+  &--primary {
+    background: var(--pb-green);
+    color: #fff;
+
+    &:hover:not(:disabled) {
+      background: var(--pb-green-dark);
+    }
+  }
+
+  &--small {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+
+  &--ghost {
+    background: transparent;
+    box-shadow: none;
+    color: var(--pb-muted);
+    text-decoration: underline;
+  }
+
+  &--copied {
+    background: #eef7e6;
+    color: #3d7d1c;
+  }
+
+  // Кнопки в зелёной шапке: прозрачные, с белой обводкой
+  &--header {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    color: #fff;
+    padding: 5px 10px;
+    font-size: 13px;
+    box-shadow: none;
+
+    &:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.15);
+    }
+  }
+
+  // Второй шаг подтверждения необратимого действия
+  &--confirming {
+    background: #fff;
+    color: var(--pb-danger);
+    border-color: #fff;
+    font-weight: 600;
+  }
+
+  &--pulse {
+    animation: btn-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes btn-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0);
+  }
+}
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 0.9rem;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.32);
+  }
+
+  &:focus-visible {
+    outline: $focus-ring;
+    outline-offset: 2px;
+  }
+}
+
+/* ==========================================================================
+   Среда пользователя
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .chat,
+  .chat-launcher,
+  .meter__fill,
+  .btn--pulse {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .chat {
+    right: 8px;
+    left: 8px;
+    bottom: 88px;
+    width: auto;
+    height: calc(100dvh - 104px);
+  }
+
+  // Ниже 16px Safari принудительно зумит страницу при фокусе,
+  // а панель position:fixed после зума уезжает за экран
+  .composer__field,
+  .setup__input {
+    font-size: 16px;
+  }
+
+  .btn--small,
+  .btn--header {
+    padding: 10px 14px;
+    min-height: 40px;
+  }
+
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+}

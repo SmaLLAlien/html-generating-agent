@@ -42,4 +42,6 @@ testem.log
 Thumbs.db
 /my-express-server/node_modules/
 /ai-widgets/node_modules/
+# Сборка сервера: корневой /dist заякорен на корень и её не покрывает
+/my-express-server/dist/
 .env

@@ -1,0 +1,23 @@
+/* Глобальные стили. Всё, что касается чата, живёт в его компоненте. */
+
+// Шрифт грузится ссылкой в index.html, а не через @import: браузер видит её
+// сразу при разборе документа, тогда как CSS-импорт откладывает запрос до
+// загрузки этого файла. Плюс Sass не ругается на устаревший @import.
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  // PryvatSans — фирменный шрифт ПриватБанка; Open Sans — его официальный фолбэк
+  font-family: 'PryvatSans', 'Open Sans', 'Segoe UI', Arial, sans-serif;
+  background: #fff;
+  color: rgba(0, 0, 0, 0.87);
+}
