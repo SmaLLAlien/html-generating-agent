@@ -1,29 +1,28 @@
 <!-- Плавающая кнопка-лаунчер (как у помощника ПриватБанка) -->
 <button
-  class="launcher"
-  [class.open]="open()"
+  class="chat-launcher"
   (click)="togglePanel()"
   [attr.aria-label]="open() ? 'Свернуть чат' : 'Открыть чат'"
 >
   @if (open()) {
-    <span class="launcher-icon">✕</span>
+    ✕
   } @else {
-    <span class="launcher-icon">💬</span>
+    💬
   }
 </button>
 
 @if (open()) {
   <div
-    class="panel"
-    [class.drag-over]="dragOver()"
+    class="chat"
+    [class.chat--drag-over]="dragOver()"
     (dragover)="onDragOver($event)"
     (dragleave)="onDragLeave()"
     (drop)="onDrop($event)"
   >
-    <header class="panel-header">
-      <div class="panel-title">
-        <strong>Помощник по виджетам</strong>
-        <span class="sub">
+    <header class="chat__header">
+      <div class="chat__titles">
+        <strong class="chat__title">Помощник по виджетам</strong>
+        <span class="chat__subtitle">
           @if (phase() === 'chat') {
             {{ fullName() }} · online
           } @else {
@@ -31,11 +30,11 @@
           }
         </span>
       </div>
-      <div class="header-actions">
+      <div class="chat__actions">
         @if (phase() === 'chat') {
           <button
-            class="btn header-btn"
-            [class.confirming]="pendingConfirm() === 'new'"
+            class="btn btn--header"
+            [class.btn--confirming]="pendingConfirm() === 'new'"
             [disabled]="busy()"
             (click)="confirmDestructive('new')"
             title="Закрыть текущий диалог и начать новый — история и все варианты будут удалены"
@@ -43,9 +42,9 @@
             {{ pendingConfirm() === 'new' ? 'Точно?' : 'Новый' }}
           </button>
           <button
-            class="btn header-btn"
-            [class.pulse]="canClose() && pendingConfirm() !== 'end'"
-            [class.confirming]="pendingConfirm() === 'end'"
+            class="btn btn--header"
+            [class.btn--pulse]="canClose() && pendingConfirm() !== 'end'"
+            [class.btn--confirming]="pendingConfirm() === 'end'"
             [disabled]="busy()"
             (click)="confirmDestructive('end')"
             title="Завершить диалог — история и все варианты будут удалены"
@@ -65,7 +64,7 @@
     </header>
 
     @if (phase() === 'chat') {
-      <div class="toolbar">
+      <div class="chat__toolbar">
         @if (models().length) {
           <select
             class="model-select"
@@ -86,31 +85,31 @@
             }
           </select>
         } @else if (modelsError()) {
-          <button class="btn small ghost" (click)="retryLoadModels()">
+          <button class="btn btn--small btn--ghost" (click)="retryLoadModels()">
             Модели недоступны · обновить
           </button>
         }
 
         @if (context(); as ctx) {
           <div
-            class="ctx"
-            [class.warn]="contextLevel() === 'warn'"
-            [class.danger]="contextLevel() === 'danger'"
+            class="meter"
+            [class.meter--warn]="contextLevel() === 'warn'"
+            [class.meter--danger]="contextLevel() === 'danger'"
             [title]="contextTooltip()"
           >
-            <span class="ctx-label"
+            <span class="meter__label"
               >{{ fmtTokens(ctx.contextTokens) }} /
               {{ fmtTokens(ctx.budget) }} · {{ ctx.percent }}%</span
             >
             <span
-              class="ctx-bar"
+              class="meter__bar"
               role="progressbar"
               [attr.aria-valuenow]="contextPercent()"
               aria-valuemin="0"
               aria-valuemax="100"
               aria-label="Заполненность контекста"
             >
-              <span class="ctx-fill" [style.width.%]="contextPercent()"></span>
+              <span class="meter__fill" [style.width.%]="contextPercent()"></span>
             </span>
           </div>
         }
@@ -118,24 +117,26 @@
     }
 
     @if (phase() === 'setup') {
-      <div class="panel-body setup">
+      <div class="chat__body setup">
         <div class="day-chip">Сегодня</div>
-        <p class="muted">
+        <p class="setup__hint">
           Соберу HTML-виджет без JavaScript. Для старта укажите данные
           пользователя — они передаются агенту.
         </p>
-        <label>
+        <label class="setup__field">
           LDAP
           <input
+            class="setup__input"
             type="text"
             [ngModel]="ldap()"
             (ngModelChange)="ldap.set($event)"
             placeholder="i.ivanov"
           />
         </label>
-        <label>
+        <label class="setup__field">
           ФИО
           <input
+            class="setup__input"
             type="text"
             [ngModel]="fullName()"
             (ngModelChange)="fullName.set($event)"
@@ -143,10 +144,10 @@
           />
         </label>
         @if (setupError()) {
-          <p class="error-text" role="alert">{{ setupError() }}</p>
+          <p class="setup__error" role="alert">{{ setupError() }}</p>
         }
         <button
-          class="btn primary"
+          class="btn btn--primary"
           [disabled]="busy() || !ldap().trim() || !fullName().trim()"
           (click)="startSession()"
         >
@@ -157,12 +158,12 @@
 
     @if (phase() === 'chat') {
       @if (canClose()) {
-        <div class="close-banner">✅ Виджет принят — диалог можно закрывать.</div>
+        <div class="chat__banner">✅ Виджет принят — диалог можно закрывать.</div>
       }
 
-      <div class="messages-wrap">
+      <div class="feed">
         <div
-          class="messages"
+          class="feed__list"
           #scrollBox
           (scroll)="onScroll()"
           role="log"
@@ -175,8 +176,8 @@
             @if (m.notice) {
               <div
                 class="notice"
-                [class.limit]="m.notice === 'limit'"
-                [class.expired]="m.notice === 'expired'"
+                [class.notice--limit]="m.notice === 'limit'"
+                [class.notice--expired]="m.notice === 'expired'"
                 role="status"
               >
                 @if (m.notice === 'limit') {
@@ -184,7 +185,7 @@
                   Диалог стал слишком длинным — продолжить в нём нельзя.
                   Начните новый: история и варианты этого диалога будут удалены.
                   <button
-                    class="btn primary small"
+                    class="btn btn--primary btn--small"
                     [disabled]="busy()"
                     (click)="newDialog()"
                   >
@@ -194,7 +195,7 @@
                   <strong>Диалог истёк.</strong>
                   Сессия удалена на сервере после часа без активности.
                   <button
-                    class="btn primary small"
+                    class="btn btn--primary btn--small"
                     [disabled]="busy()"
                     (click)="newDialog()"
                   >
@@ -206,25 +207,29 @@
                 }
               </div>
             } @else {
-              <div class="msg" [class.user]="m.role === 'user'" [class.error]="m.error">
+              <div
+                class="message"
+                [class.message--user]="m.role === 'user'"
+                [class.message--error]="m.error"
+              >
                 @if (m.role === 'assistant') {
-                  <div class="msg-meta">Помощник</div>
+                  <div class="message__meta">Помощник</div>
                 }
-                <div class="row">
+                <div class="message__row">
                   @if (m.role === 'assistant') {
-                    <div class="avatar" aria-hidden="true">AI</div>
+                    <div class="message__avatar" aria-hidden="true">AI</div>
                   }
-                  <div class="bubble">
+                  <div class="message__bubble">
                     @if (m.streaming && !m.text && !m.widgetHtml) {
-                      <span class="typing">Помощник печатает…</span>
+                      <span class="message__typing">Помощник печатает…</span>
                     } @else if (m.text) {
-                      <span class="text">{{ m.text }}</span>
+                      <span class="message__text">{{ m.text }}</span>
                     }
 
                     <!-- Картинки, которые приложил пользователь: показываем
                          прямо в ленте, чтобы было видно, что именно ушло -->
                     @if (m.attachments?.length) {
-                      <div class="msg-attachments">
+                      <div class="message__attachments">
                         @for (a of m.attachments; track a.id) {
                           <button
                             type="button"
@@ -232,26 +237,32 @@
                             (click)="openLightbox(a)"
                             [title]="a.name + ' — открыть крупнее'"
                           >
-                            <img [src]="a.dataUrl" [alt]="a.name" />
+                            <img class="thumb__image" [src]="a.dataUrl" [alt]="a.name" />
                           </button>
                         }
                       </div>
                     }
 
                     @if (m.buildingWidget && !m.widgetHtml) {
-                      <span class="typing building">Собираю виджет…</span>
+                      <span class="message__typing message__typing--block">
+                        Собираю виджет…
+                      </span>
                     }
 
                     @if (m.truncated) {
-                      <span class="hint">
+                      <span class="message__hint">
                         ✂️ Ответ обрезан по лимиту длины — попросите продолжить.
                       </span>
                     }
 
                     @if (m.widgetHtml) {
-                      <div class="widget-block">
-                        <div class="widget-preview" [class.expanded]="m.expanded">
+                      <div class="widget">
+                        <div
+                          class="widget__preview"
+                          [class.widget__preview--expanded]="m.expanded"
+                        >
                           <iframe
+                            class="widget__frame"
                             sandbox=""
                             [srcdoc]="trustHtml(m.widgetHtml)"
                             [title]="
@@ -263,20 +274,20 @@
                         </div>
 
                         @if (m.variant) {
-                          <div class="variant-badge">
-                            <span class="variant-num">Вариант #{{ m.variant }}</span>
+                          <div class="variant">
+                            <span class="variant__num">Вариант #{{ m.variant }}</span>
                             @if (m.variantTitle) {
-                              <span class="variant-title">{{ m.variantTitle }}</span>
+                              <span class="variant__title">{{ m.variantTitle }}</span>
                             }
                             @if (m.basedOn) {
-                              <span class="variant-parent">на основе #{{ m.basedOn }}</span>
+                              <span class="variant__parent">на основе #{{ m.basedOn }}</span>
                             }
                           </div>
                         }
 
-                        <div class="widget-actions">
+                        <div class="widget__actions">
                           <button
-                            class="btn primary small"
+                            class="btn btn--primary btn--small"
                             [disabled]="busy() || m.accepted || canClose()"
                             (click)="accept($index)"
                           >
@@ -284,7 +295,7 @@
                           </button>
                           @if (m.variant) {
                             <button
-                              class="btn small"
+                              class="btn btn--small"
                               [disabled]="busy() || inputBlocked()"
                               (click)="revisit($index)"
                               title="Взять этот вариант за основу"
@@ -293,33 +304,33 @@
                             </button>
                           }
                           <button
-                            class="btn small"
+                            class="btn btn--small"
                             (click)="toggleExpand($index)"
                             [title]="m.expanded ? 'Свернуть превью' : 'Показать виджет крупнее'"
                           >
                             {{ m.expanded ? 'Свернуть' : 'Развернуть' }}
                           </button>
-                          <button class="btn small" (click)="toggleCode($index)">
+                          <button class="btn btn--small" (click)="toggleCode($index)">
                             {{ m.showCode ? 'Скрыть код' : 'Код' }}
                           </button>
                           <button
-                            class="btn small"
-                            [class.copied]="copiedIndex() === $index"
+                            class="btn btn--small"
+                            [class.btn--copied]="copiedIndex() === $index"
                             (click)="copyCode(m.widgetHtml, $index)"
                           >
                             {{ copiedIndex() === $index ? 'Скопировано ✓' : 'Копировать' }}
                           </button>
                         </div>
                         @if (m.showCode) {
-                          <pre class="code"><code>{{ m.widgetHtml }}</code></pre>
+                          <pre class="widget__code"><code>{{ m.widgetHtml }}</code></pre>
                         }
                       </div>
                     }
 
                     @if ((m.error || m.stopped) && m.retryable && failedTurn()) {
-                      <div class="widget-actions">
+                      <div class="widget__actions">
                         <button
-                          class="btn primary small"
+                          class="btn btn--primary btn--small"
                           [disabled]="busy() || inputBlocked()"
                           (click)="retry()"
                         >
@@ -329,7 +340,7 @@
                     }
 
                     @if (m.time) {
-                      <span class="time">{{ m.time }}</span>
+                      <span class="message__time">{{ m.time }}</span>
                     }
                   </div>
                 </div>
@@ -339,20 +350,20 @@
         </div>
 
         @if (hasNewBelow()) {
-          <button class="jump-latest" (click)="jumpToLatest()">
+          <button class="feed__jump" (click)="jumpToLatest()">
             ↓ Новые сообщения
           </button>
         }
       </div>
 
       @if (pending().length || uploading()) {
-        <div class="composer-attachments">
+        <div class="attachments attachments--pending">
           @for (a of pending(); track a.id) {
-            <div class="thumb pending" [title]="a.name">
-              <img [src]="a.dataUrl" [alt]="a.name" />
+            <div class="thumb" [title]="a.name">
+              <img class="thumb__image" [src]="a.dataUrl" [alt]="a.name" />
               <button
                 type="button"
-                class="thumb-remove"
+                class="thumb__remove"
                 (click)="removePending(a.id)"
                 [attr.aria-label]="'Убрать ' + a.name"
               >
@@ -361,7 +372,7 @@
             </div>
           }
           @if (uploading()) {
-            <span class="thumb-loading">Готовлю картинку…</span>
+            <span class="attachments__status">Готовлю картинку…</span>
           }
         </div>
       }
@@ -370,13 +381,13 @@
         <input
           type="file"
           #fileInput
-          class="file-input"
+          class="composer__file"
           accept="image/png,image/jpeg,image/webp"
           multiple
           (change)="onFilePicked($event)"
         />
         <button
-          class="attach-btn"
+          class="composer__attach"
           [disabled]="busy() || inputBlocked() || uploading()"
           (click)="fileInput.click()"
           aria-label="Приложить картинку"
@@ -385,6 +396,7 @@
           📎
         </button>
         <textarea
+          class="composer__field"
           rows="1"
           [placeholder]="
             sessionExpired()
@@ -401,7 +413,7 @@
         ></textarea>
         @if (busy()) {
           <button
-            class="send-btn stop"
+            class="composer__send composer__send--stop"
             (click)="stop()"
             aria-label="Остановить генерацию"
             title="Остановить"
@@ -410,7 +422,7 @@
           </button>
         } @else {
           <button
-            class="send-btn"
+            class="composer__send"
             [disabled]="inputBlocked() || (!input().trim() && !pending().length)"
             (click)="send()"
             aria-label="Отправить"
@@ -423,18 +435,22 @@
 
     @if (lightbox(); as shot) {
       <div class="lightbox" (click)="closeLightbox()">
-        <img [src]="shot.dataUrl" [alt]="shot.name" />
-        <button class="lightbox-close" (click)="closeLightbox()" aria-label="Закрыть">
+        <img class="lightbox__image" [src]="shot.dataUrl" [alt]="shot.name" />
+        <button
+          class="lightbox__close"
+          (click)="closeLightbox()"
+          aria-label="Закрыть"
+        >
           ✕
         </button>
       </div>
     }
 
     @if (phase() === 'closed') {
-      <div class="panel-body setup">
-        <h2>Диалог завершён</h2>
-        <p class="muted">История и все варианты виджета удалены с сервера.</p>
-        <button class="btn primary" [disabled]="busy()" (click)="newDialog()">
+      <div class="chat__body setup">
+        <h2 class="setup__title">Диалог завершён</h2>
+        <p class="setup__hint">История и все варианты виджета удалены с сервера.</p>
+        <button class="btn btn--primary" [disabled]="busy()" (click)="newDialog()">
           Начать новый диалог
         </button>
       </div>

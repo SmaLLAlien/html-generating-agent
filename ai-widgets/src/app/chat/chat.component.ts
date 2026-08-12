@@ -28,7 +28,7 @@ const STICK_TO_BOTTOM_PX = 80;
   selector: 'app-chat',
   imports: [FormsModule],
   templateUrl: './chat.component.html',
-  styleUrl: './chat.component.css',
+  styleUrl: './chat.component.scss',
 })
 export class ChatComponent {
   private readonly chat = inject(ChatService);
