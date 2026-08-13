@@ -14,6 +14,7 @@
 @if (open()) {
   <div
     class="chat"
+    [class.chat--expanded]="expanded()"
     [class.chat--drag-over]="dragOver()"
     (dragover)="onDragOver($event)"
     (dragleave)="onDragLeave()"
@@ -52,6 +53,14 @@
             {{ pendingConfirm() === 'end' ? 'Точно?' : 'Завершить' }}
           </button>
         }
+        <button
+          class="icon-btn"
+          (click)="toggleExpandPanel()"
+          [attr.aria-label]="expanded() ? 'Вернуть обычный размер' : 'Развернуть почти на весь экран'"
+          [title]="expanded() ? 'Обычный размер' : 'Развернуть'"
+        >
+          {{ expanded() ? '⤡' : '⤢' }}
+        </button>
         <button
           class="icon-btn"
           (click)="togglePanel()"
@@ -397,6 +406,7 @@
         </button>
         <textarea
           class="composer__field"
+          #composerField
           rows="1"
           [placeholder]="
             sessionExpired()
@@ -406,7 +416,7 @@
                 : 'Введите сообщение…   Shift+Enter — новая строка'
           "
           [ngModel]="input()"
-          (ngModelChange)="input.set($event)"
+          (ngModelChange)="onInputChange($event)"
           (keydown.enter)="$event.preventDefault(); send()"
           [disabled]="busy() || inputBlocked()"
           aria-label="Сообщение помощнику"

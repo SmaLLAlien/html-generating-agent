@@ -34,6 +34,8 @@ export class ChatComponent {
   private readonly chat = inject(ChatService);
   private readonly sanitizer = inject(DomSanitizer);
   private readonly scrollBox = viewChild<ElementRef<HTMLElement>>('scrollBox');
+  private readonly composerField =
+    viewChild<ElementRef<HTMLTextAreaElement>>('composerField');
   private readonly safeHtmlCache = new Map<string, SafeHtml>();
 
   private sessionId: string | null = null;
@@ -45,6 +47,8 @@ export class ChatComponent {
   private copyTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly open = signal(false);
+  /** Панель развёрнута почти на весь экран (90vw × 90vh) */
+  readonly expanded = signal(false);
   readonly phase = signal<Phase>('setup');
   readonly ldap = signal('i.ivanov');
   readonly fullName = signal('Иванов Иван Иванович');
@@ -129,6 +133,34 @@ export class ChatComponent {
   togglePanel(): void {
     this.open.update((v) => !v);
     if (this.open()) this.scrollDown(true);
+  }
+
+  toggleExpandPanel(): void {
+    this.expanded.update((v) => !v);
+    // Ширина ленты меняется — держим прокрутку у последних сообщений
+    this.scrollDown(true);
+  }
+
+  /**
+   * Авторост поля ввода, как у больших чатов: высота следует за контентом.
+   * Сначала сбрасываем в auto, иначе scrollHeight не уменьшается при
+   * удалении строк; потолок задаёт max-height в стилях.
+   */
+  onInputChange(value: string): void {
+    this.input.set(value);
+    this.autoGrowComposer();
+  }
+
+  private autoGrowComposer(): void {
+    const el = this.composerField()?.nativeElement;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }
+
+  /** После программной очистки поля DOM обновится только после рендера */
+  private resetComposerHeight(): void {
+    setTimeout(() => this.autoGrowComposer());
   }
 
   async startSession(): Promise<void> {
@@ -308,6 +340,7 @@ export class ChatComponent {
     if ((!text && !attachments.length) || this.inputBlocked()) return;
     this.input.set('');
     this.pending.set([]);
+    this.resetComposerHeight();
     await this.exchange(
       { text: text || undefined, attachmentIds: attachments.map((a) => a.id) },
       text || 'Вот изображение — сделай виджет по нему.',
@@ -343,6 +376,7 @@ export class ChatComponent {
     if (variant == null) return;
     const comment = this.input().trim();
     this.input.set('');
+    this.resetComposerHeight();
     await this.exchange(
       { action: 'revisit', variant, text: comment || undefined },
       comment

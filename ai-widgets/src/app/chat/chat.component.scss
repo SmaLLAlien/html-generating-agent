@@ -89,6 +89,17 @@ $focus-ring: 2px solid var(--pb-green-dark);
     outline-offset: -6px;
   }
 
+  // Почти на весь экран: 90vw × 90vh, с равными полями по 5% с каждой стороны.
+  // transition здесь не вешаем — width/height дёргали бы layout всей ленты
+  &--expanded {
+    width: 90vw;
+    max-width: 90vw;
+    height: 90vh;
+    max-height: 90vh;
+    right: 5vw;
+    bottom: 5vh;
+  }
+
   &__header {
     display: flex;
     justify-content: space-between;
@@ -647,7 +658,8 @@ $focus-ring: 2px solid var(--pb-green-dark);
    ========================================================================== */
 .composer {
   display: flex;
-  align-items: center;
+  // К низу, а не по центру: когда поле растёт, кнопки остаются у последней строки
+  align-items: flex-end;
   gap: 8px;
   padding: 10px 12px;
   background: #fff;
@@ -694,7 +706,12 @@ $focus-ring: 2px solid var(--pb-green-dark);
     background: transparent;
     font-family: inherit;
     font-size: 14px;
+    line-height: 1.4;
     color: var(--pb-text);
+    // Авторост из компонента: высота следует за текстом до потолка,
+    // дальше — внутренняя прокрутка
+    max-height: 200px;
+    overflow-y: auto;
 
     &:focus {
       outline: none;
