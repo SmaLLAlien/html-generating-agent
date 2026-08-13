@@ -1,7 +1,4 @@
-import {
-  createGoogleGenerativeAI,
-  type GoogleGenerativeAIProvider,
-} from '@ai-sdk/google';
+import { createGoogle, type GoogleProvider } from '@ai-sdk/google';
 
 /** Уровни мышления Gemini 3. Это относительные допуски, а не бюджет в токенах. */
 export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
@@ -124,9 +121,9 @@ export function callSettingsFor(modelId: string): ModelCallSettings {
   return { temperature: 0.7 };
 }
 
-let provider: GoogleGenerativeAIProvider | null = null;
+let provider: GoogleProvider | null = null;
 
-function getProvider(): GoogleGenerativeAIProvider {
+function getProvider(): GoogleProvider {
   const apiKey =
     process.env.GEMINI_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
@@ -135,7 +132,7 @@ function getProvider(): GoogleGenerativeAIProvider {
     );
   }
   if (!provider) {
-    provider = createGoogleGenerativeAI({ apiKey });
+    provider = createGoogle({ apiKey });
   }
   return provider;
 }

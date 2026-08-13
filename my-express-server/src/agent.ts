@@ -1,6 +1,6 @@
 import {
   hasToolCall,
-  stepCountIs,
+  isStepCount,
   streamText,
   type ModelMessage,
   type UserContent,
@@ -125,10 +125,12 @@ function buildUserContent(
 
   return [
     { type: 'text', text: `${userText}\n\n[Приложены изображения: ${list}]` },
+    // Часть `image` в v7 объявлена устаревшей — картинки едут частью `file`
     ...attachments.map((a) => ({
-      type: 'image' as const,
-      image: a.data,
+      type: 'file' as const,
+      data: a.data,
       mediaType: a.mediaType,
+      filename: a.name,
     })),
   ];
 }
@@ -169,10 +171,10 @@ export async function runAgent(
 
   const result = streamText({
     model: resolveModel(session.modelId),
-    system: buildSystemPrompt(session.user),
+    instructions: buildSystemPrompt(session.user),
     messages: [...session.messages, ...stateMessages(session), userMessage],
     tools: buildTools(session, emit),
-    stopWhen: [stepCountIs(MAX_AGENT_STEPS), hasToolCall('finishDialog')],
+    stopWhen: [isStepCount(MAX_AGENT_STEPS), hasToolCall('finishDialog')],
     maxOutputTokens: MAX_OUTPUT_TOKENS,
     abortSignal: signal,
     // temperature и настройки мышления зависят от поколения модели
@@ -184,7 +186,7 @@ export async function runAgent(
   let textInStep = false;
   let finishReason = '';
 
-  for await (const part of result.fullStream) {
+  for await (const part of result.stream) {
     switch (part.type) {
       case 'start-step':
         textInStep = false;
@@ -255,10 +257,10 @@ export async function runAgent(
   }
 
   // Успех — фиксируем обмен в памяти агента.
-  // response.messages содержит ответ ассистента вместе с вызовами инструментов
-  // и сообщения с их результатами.
-  const response = await result.response;
-  session.messages.push(userMessage, ...response.messages);
+  // responseMessages содержит ответ ассистента за ВСЕ шаги хода: вызовы
+  // инструментов и сообщения с их результатами (в v7 response.messages
+  // одного шага больше не накапливается).
+  session.messages.push(userMessage, ...(await result.responseMessages));
 
   // Вытесняем код всех вариантов, кроме закреплённых. Делаем это сразу после
   // хода, чтобы уже следующий вызов ушёл с укороченной историей.
@@ -271,27 +273,31 @@ export async function runAgent(
     });
   }
 
-  // ВАЖНО: usage (последний шаг), а не totalUsage (сумма по всем шагам).
-  // Каждый шаг агентного цикла переотправляет всю историю, поэтому totalUsage
-  // на многошаговом ходе задваивает её и счётчик скачет вперёд-назад.
+  // ВАЖНО: размер контекста — по ПОСЛЕДНЕМУ шагу (finalStep.usage), а не по
+  // общему usage. В v7 семантика перевёрнута относительно v5: result.usage
+  // теперь суммирует все шаги цикла, а каждый шаг переотправляет всю историю —
+  // с общим значением счётчик скакал бы вперёд-назад на многошаговых ходах.
   // Размер истории для следующего вызова = вход последнего шага + его выход.
-  const usage = await result.usage;
+  const finalStep = await result.finalStep;
+  const finalUsage = finalStep.usage;
   // reasoningTokens сюда не входят: размышления модели оплачиваются, но в
   // историю не попадают — обратно уезжают только их подписи (thought signatures).
   // Отдельные модели семейства 3 иногда не отдают outputTokens вовсе, поэтому
   // сумма может оказаться нулевой — тогда оставляем прежнее значение.
   const contextTokens =
-    (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || session.contextTokens;
+    (finalUsage.inputTokens ?? 0) + (finalUsage.outputTokens ?? 0) ||
+    session.contextTokens;
   session.contextTokens = contextTokens;
   session.turnCount++;
 
-  const cachedTokens = await readCachedTokens(result, usage);
+  const cachedTokens = readCachedTokens(finalStep);
 
-  // А вот размышления считаются наоборот — по totalUsage. Модель думает на
-  // ПЕРВОМ шаге, перед вызовом инструмента, поэтому в usage последнего шага
-  // reasoningTokens приходит undefined. Две метрики — два источника:
+  // А вот размышления считаются наоборот — по сумме всех шагов (result.usage).
+  // Модель думает на ПЕРВОМ шаге, перед вызовом инструмента, поэтому в usage
+  // последнего шага размышлений нет. Две метрики — два источника:
   // размер истории берём с последнего шага, стоимость размышлений — со всех.
-  const reasoningTokens = (await result.totalUsage).reasoningTokens ?? 0;
+  const reasoningTokens =
+    (await result.usage).outputTokenDetails.reasoningTokens ?? 0;
   logInfo('turn.done', ctx, {
     contextTokens,
     cachedTokens,
@@ -350,14 +356,14 @@ export function recordFailedTurn(
  *
  * Сначала пробуем портируемое поле AI SDK, затем — сырой ответ Gemini.
  */
-async function readCachedTokens(
-  result: { providerMetadata: Promise<Record<string, unknown> | undefined> },
-  usage: { cachedInputTokens?: number | undefined }
-): Promise<number> {
-  if (typeof usage.cachedInputTokens === 'number') {
-    return usage.cachedInputTokens;
-  }
-  const meta = (await result.providerMetadata) as
+function readCachedTokens(finalStep: {
+  usage: { inputTokenDetails: { cacheReadTokens: number | undefined } };
+  providerMetadata: Record<string, unknown> | undefined;
+}): number {
+  const portable = finalStep.usage.inputTokenDetails.cacheReadTokens;
+  if (typeof portable === 'number') return portable;
+
+  const meta = finalStep.providerMetadata as
     | { google?: { usageMetadata?: { cachedContentTokenCount?: number | null } } }
     | undefined;
   return meta?.google?.usageMetadata?.cachedContentTokenCount ?? 0;

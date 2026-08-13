@@ -5,13 +5,14 @@
 когда вариант одобрен. Каждая версия получает номер, к ней можно вернуться.
 
 - **`ai-widgets/`** — Angular 19, плавающий чат-виджет. Только сигналы, без RxJS-стора.
-- **`my-express-server/`** — Express 5 + TypeScript, агент на Vercel AI SDK v5 и Google Gemini.
+- **`my-express-server/`** — Express 5 + TypeScript, агент на Vercel AI SDK v7
+  (`ai@7`, `@ai-sdk/google@4`) и Google Gemini.
 - **`docs/agent-architecture.md`** — как устроен агент внутри: инструменты, промпт, контекст.
 - **`AGENTS.md`** — рабочие инструкции для кодовых агентов (сборка, проверка, грабли).
 
 ## Быстрый старт
 
-Нужен Node 20+ и ключ Google Gemini.
+Нужен Node 22+ (требование `ai@7`) и ключ Google Gemini.
 
 ```bash
 cp "my-express-server/.env.example" "my-express-server/.env"

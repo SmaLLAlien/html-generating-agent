@@ -127,16 +127,16 @@ export function buildTools(session: ChatSession, emit: EmitEvent): ToolSet {
        * Это и есть встроенное вытеснение: код живёт в контексте ровно один раз,
        * как аргумент вызова, и не дублируется результатом.
        */
-      toModelOutput: (result) =>
-        result.ok
+      toModelOutput: ({ output }) =>
+        output.ok
           ? {
               type: 'text',
-              value: `Вариант #${result.variant} сохранён и показан пользователю. Ссылайся на него по номеру.`,
+              value: `Вариант #${output.variant} сохранён и показан пользователю. Ссылайся на него по номеру.`,
             }
           : {
               type: 'error-text',
               value:
-                `Виджет отклонён, пользователю он НЕ показан. Нарушения: ${result.problems.join(', ')}. ` +
+                `Виджет отклонён, пользователю он НЕ показан. Нарушения: ${output.problems.join(', ')}. ` +
                 'Исправь код и вызови emitWidget заново.',
             },
     }),
@@ -166,13 +166,13 @@ export function buildTools(session: ChatSession, emit: EmitEvent): ToolSet {
           html: variant.html,
         };
       },
-      toModelOutput: (result) =>
-        result.ok
+      toModelOutput: ({ output }) =>
+        output.ok
           ? {
               type: 'text',
-              value: `Полный код варианта #${result.n} «${result.title}»:\n${result.html}`,
+              value: `Полный код варианта #${output.n} «${output.title}»:\n${output.html}`,
             }
-          : { type: 'error-text', value: result.error },
+          : { type: 'error-text', value: output.error },
     }),
 
     getAttachment: tool({
@@ -200,23 +200,24 @@ export function buildTools(session: ChatSession, emit: EmitEvent): ToolSet {
         };
       },
       /**
-       * Результат инструмента может нести медиа, а не только текст — этим и
-       * возвращаем картинку обратно в контекст модели.
+       * Результат инструмента может нести файл, а не только текст — этим и
+       * возвращаем картинку обратно в контекст модели. Часть `media` в v7
+       * удалена, инлайновые данные едут частью `file` с тегированным data.
        */
-      toModelOutput: (result) =>
-        result.ok
+      toModelOutput: ({ output }) =>
+        output.ok
           ? {
               type: 'content',
               value: [
-                { type: 'text', text: `Изображение «${result.name}»:` },
+                { type: 'text', text: `Изображение «${output.name}»:` },
                 {
-                  type: 'media',
-                  data: result.base64,
-                  mediaType: result.mediaType,
+                  type: 'file',
+                  mediaType: output.mediaType,
+                  data: { type: 'data', data: output.base64 },
                 },
               ],
             }
-          : { type: 'error-text', value: result.error },
+          : { type: 'error-text', value: output.error },
     }),
 
     finishDialog: tool({

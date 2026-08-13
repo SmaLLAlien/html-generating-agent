@@ -75,13 +75,34 @@ function pinnedVariants(session: ChatSession): Set<number> {
  * старше заменяется текстовой пометкой, а сами данные лежат в реестре сессии и
  * достаются инструментом getAttachment.
  */
+/**
+ * Часть с картинкой в пользовательском сообщении. Сейчас мы кладём картинки
+ * частью `file` (v7), ветка `image` оставлена для совместимости со старым
+ * форматом — код не должен зависеть от того, что сессии не переживают рестарт.
+ */
+function isImagePart(part: { type: string; mediaType?: string }): boolean {
+  if (part.type === 'image') return true;
+  return part.type === 'file' && (part.mediaType ?? '').startsWith('image/');
+}
+
+/** Размер полезной нагрузки части для статистики освобождённого места */
+function imagePartBytes(part: {
+  type: string;
+  image?: unknown;
+  data?: unknown;
+}): number {
+  const payload = part.type === 'image' ? part.image : part.data;
+  if (payload instanceof Uint8Array) return payload.length;
+  return String(payload ?? '').length;
+}
+
 function evictImages(session: ChatSession, stats: EvictionStats): void {
   // Ищем последнее пользовательское сообщение с картинками — оно закреплено
   let lastWithImages = -1;
   for (let i = session.messages.length - 1; i >= 0; i--) {
     const message = session.messages[i]!;
     if (message.role !== 'user' || !Array.isArray(message.content)) continue;
-    if (message.content.some((p) => p.type === 'image')) {
+    if (message.content.some((p) => isImagePart(p))) {
       lastWithImages = i;
       break;
     }
@@ -98,7 +119,7 @@ function evictImages(session: ChatSession, stats: EvictionStats): void {
     const parts = message.content;
     for (let j = 0; j < parts.length; j++) {
       const part = parts[j]!;
-      if (part.type !== 'image') continue;
+      if (!isImagePart(part)) continue;
 
       const info = session.attachments[seen];
       seen++;
@@ -107,8 +128,7 @@ function evictImages(session: ChatSession, stats: EvictionStats): void {
       const label = info
         ? `«${info.name}» (id ${info.id}). Посмотреть снова — инструментом getAttachment("${info.id}")`
         : 'без идентификатора';
-      const before =
-        part.image instanceof Uint8Array ? part.image.length : String(part.image).length;
+      const before = imagePartBytes(part);
       const stub = `${STUB_MARK} Изображение ${label} убрано из контекста.`;
 
       parts[j] = { type: 'text', text: stub };

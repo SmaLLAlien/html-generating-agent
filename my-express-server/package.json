@@ -13,8 +13,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@ai-sdk/google": "^2.0.0",
-    "ai": "^5.0.0",
+    "@ai-sdk/google": "^4.0.43",
+    "ai": "^7.0.64",
     "dotenv": "^17.2.0",
     "express": "^5.2.1",
     "zod": "^4.1.0"
